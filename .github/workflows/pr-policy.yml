@@ -1,0 +1,143 @@
+name: PR Policy
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  branch-policy:
+    name: Branch Policy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate source and target branches
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          echo "Source: $HEAD_REF"
+          echo "Target: $BASE_REF"
+
+          case "$HEAD_REF" in
+            feature/*|chore/*|docs/*)
+              if [ "$BASE_REF" != "dev" ]; then
+                echo "::error::$HEAD_REF branches must target dev."
+                exit 1
+              fi
+              ;;
+
+            fix/*)
+              if [[ "$HEAD_REF" =~ ^fix/([0-9]+\.[0-9]+\.[0-9]+)/.+$ ]]; then
+                VERSION="${BASH_REMATCH[1]}"
+                EXPECTED_TARGET="release/$VERSION"
+
+                if [ "$BASE_REF" != "$EXPECTED_TARGET" ]; then
+                  echo "::error::Release fix '$HEAD_REF' must target '$EXPECTED_TARGET'."
+                  exit 1
+                fi
+              elif [ "$BASE_REF" != "dev" ]; then
+                echo "::error::Regular fix branches must target dev."
+                exit 1
+              fi
+              ;;
+
+            hotfix/*)
+              if [ "$BASE_REF" != "main" ]; then
+                echo "::error::Hotfix branches must target main."
+                exit 1
+              fi
+              ;;
+
+            promotion/*)
+              if [[ ! "$BASE_REF" =~ ^release/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::Promotion branches must target a release/x.y.z branch."
+                exit 1
+              fi
+              ;;
+
+            release/*)
+              if [ "$BASE_REF" != "main" ] && [ "$BASE_REF" != "dev" ]; then
+                echo "::error::Release branches may only target main or dev."
+                exit 1
+              fi
+              ;;
+
+            mergeback/*)
+              if [ "$BASE_REF" != "dev" ] && [[ ! "$BASE_REF" =~ ^release/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::Merge-back branches may only target dev or a release/x.y.z branch."
+                exit 1
+              fi
+              ;;
+
+            dev)
+              if [[ ! "$BASE_REF" =~ ^release/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::dev may only target an active release/x.y.z branch."
+                exit 1
+              fi
+              ;;
+
+            *)
+              echo "::error::Unsupported branch prefix: '$HEAD_REF'."
+              echo "Allowed prefixes: feature/, fix/, chore/, docs/, hotfix/, promotion/, release/."
+              exit 1
+              ;;
+          esac
+
+          echo "Branch policy passed."
+
+  docs-policy:
+    name: Documentation Scope
+    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'docs/')
+
+    steps:
+      - name: Checkout pull request branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Validate documentation-only changes
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git fetch origin "$BASE_REF"
+
+          CHANGED_FILES="$(git diff --name-only "origin/$BASE_REF...HEAD")"
+
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+
+          INVALID_FILES=""
+
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+
+            case "$file" in
+              docs/*|README.md|README.*.md|CONTRIBUTING.md|CODE_OF_CONDUCT.md|SECURITY.md|.github/PULL_REQUEST_TEMPLATE/*|.github/ISSUE_TEMPLATE/*)
+                ;;
+              *)
+                INVALID_FILES="${INVALID_FILES}${file}"$'\n'
+                ;;
+            esac
+          done <<< "$CHANGED_FILES"
+
+          if [ -n "$INVALID_FILES" ]; then
+            echo "::error::docs/* branches may only modify documentation files."
+            echo
+            echo "Non-documentation changes detected:"
+            echo "$INVALID_FILES"
+            echo
+            echo "Move these changes to an appropriate branch prefix, such as feature/, fix/, or chore/."
+            exit 1
+          fi
+
+          echo "Documentation scope passed."

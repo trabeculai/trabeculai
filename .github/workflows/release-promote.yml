@@ -1,0 +1,162 @@
+name: Promote Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  promote-release:
+    name: Promote Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve active release
+        id: release
+        run: |
+          RELEASES="$(
+            git ls-remote --heads origin 'release/*' \
+              | awk '{print $2}' \
+              | sed 's#refs/heads/##'
+          )"
+
+          COUNT="$(
+            printf '%s\n' "$RELEASES" \
+              | sed '/^$/d' \
+              | wc -l \
+              | tr -d ' '
+          )"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No active release found."
+            exit 1
+          fi
+
+          if [ "$COUNT" -gt 1 ]; then
+            echo "::error::More than one active release was found:"
+            echo "$RELEASES"
+            exit 1
+          fi
+
+          RELEASE_BRANCH="$RELEASES"
+          VERSION="${RELEASE_BRANCH#release/}"
+
+          echo "branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout active release
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          git fetch origin "$RELEASE_BRANCH"
+          git checkout -B "$RELEASE_BRANCH" "origin/$RELEASE_BRANCH"
+
+      - name: Verify release candidate exists
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          git fetch --tags --force
+
+          LAST_RC="$(
+            git tag \
+              --list "v${VERSION}rc*" \
+              --sort=-v:refname \
+              | head -n 1
+          )"
+
+          if [ -z "$LAST_RC" ]; then
+            echo "::error::No release candidate exists for version $VERSION."
+            exit 1
+          fi
+
+          echo "Latest release candidate: $LAST_RC"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Run static analysis
+        run: |
+          uv run --locked ruff check .
+          uv run --locked ruff format --check .
+          uv run --locked mypy src tests
+
+      - name: Run unit tests
+        run: uv run --locked pytest
+
+      - name: Set stable package version
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          uv version "$VERSION"
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit stable version
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          git add pyproject.toml uv.lock
+
+          if git diff --cached --quiet; then
+            echo "Version is already stable."
+          else
+            git commit -m "chore: prepare v${VERSION}"
+          fi
+
+      - name: Push stable version
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          git push origin HEAD:"$RELEASE_BRANCH"
+
+      - name: Check for existing release pull request
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          PR_NUMBER="$(
+            gh pr list \
+              --head "$RELEASE_BRANCH" \
+              --base main \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Create release pull request
+        if: steps.existing.outputs.number == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          gh pr create \
+            --head "$RELEASE_BRANCH" \
+            --base main \
+            --title "release: v$VERSION" \
+            --body-file ".github/PULL_REQUEST_TEMPLATE/release.md"

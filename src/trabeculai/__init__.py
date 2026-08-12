@@ -1,3 +1,7 @@
 """TrabeculAI — Composable AI infrastructure for healthcare."""
 
-__version__ = "0.1.0"
+from importlib.metadata import version as package_version
+
+__version__ = package_version("trabeculai")
+
+__all__ = ["__version__"]

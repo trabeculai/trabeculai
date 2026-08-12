@@ -1,0 +1,83 @@
+name: Start Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (example: 0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  start-release:
+    name: Start Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate version
+        id: version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must follow semantic version format: X.Y.Z"
+            exit 1
+          fi
+
+          echo "release_branch=release/$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Ensure release branch does not already exist
+        env:
+          RELEASE_BRANCH: ${{ steps.version.outputs.release_branch }}
+        run: |
+          if git ls-remote --exit-code --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            echo "::error::Release branch '$RELEASE_BRANCH' already exists."
+            exit 1
+          fi
+
+      - name: Ensure no active release exists
+        run: |
+          ACTIVE_RELEASES="$(
+            git ls-remote --heads origin 'release/*' \
+              | awk '{print $2}' \
+              | sed 's#refs/heads/##'
+          )"
+
+          if [ -n "$ACTIVE_RELEASES" ]; then
+            echo "::error::An active release already exists:"
+            echo "$ACTIVE_RELEASES"
+            exit 1
+          fi
+
+      - name: Create release branch from main
+        env:
+          RELEASE_BRANCH: ${{ steps.version.outputs.release_branch }}
+        run: |
+          git checkout -b "$RELEASE_BRANCH"
+          git push origin "$RELEASE_BRANCH"
+
+      - name: Open release queue pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_BRANCH: ${{ steps.version.outputs.release_branch }}
+        run: |
+          gh pr create \
+            --head dev \
+            --base "$RELEASE_BRANCH" \
+            --title "release: queue for $VERSION" \
+            --body "Tracks changes currently available in \`dev\` but not yet promoted to \`$RELEASE_BRANCH\`.
+
+          This pull request is informational and must not be merged directly.
+
+          Changes should enter this release through explicit promotion pull requests."
