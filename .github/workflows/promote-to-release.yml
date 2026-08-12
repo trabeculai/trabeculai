@@ -1,0 +1,175 @@
+name: Promote to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: "Pull request number already merged into dev"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  promote:
+    name: Promote Change
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate pull request number
+        env:
+          PR_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::Pull request must be a numeric PR number."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve active release
+        id: release
+        run: |
+          RELEASES="$(
+            git ls-remote --heads origin 'release/*' \
+              | awk '{print $2}' \
+              | sed 's#refs/heads/##'
+          )"
+
+          COUNT="$(printf '%s\n' "$RELEASES" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No active release found."
+            exit 1
+          fi
+
+          if [ "$COUNT" -gt 1 ]; then
+            echo "::error::More than one active release was found:"
+            echo "$RELEASES"
+            exit 1
+          fi
+
+          RELEASE_BRANCH="$RELEASES"
+          VERSION="${RELEASE_BRANCH#release/}"
+
+          echo "branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Load original pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          PR_DATA="$(
+            gh pr view "$PR_NUMBER" \
+              --json number,title,state,mergedAt,baseRefName,mergeCommit
+          )"
+
+          STATE="$(echo "$PR_DATA" | jq -r '.state')"
+          MERGED_AT="$(echo "$PR_DATA" | jq -r '.mergedAt // empty')"
+          BASE_REF="$(echo "$PR_DATA" | jq -r '.baseRefName')"
+          MERGE_SHA="$(echo "$PR_DATA" | jq -r '.mergeCommit.oid // empty')"
+          TITLE="$(echo "$PR_DATA" | jq -r '.title')"
+
+          if [ "$STATE" != "MERGED" ] || [ -z "$MERGED_AT" ]; then
+            echo "::error::PR #$PR_NUMBER must already be merged."
+            exit 1
+          fi
+
+          if [ "$BASE_REF" != "dev" ]; then
+            echo "::error::PR #$PR_NUMBER was merged into '$BASE_REF', not dev."
+            exit 1
+          fi
+
+          if [ -z "$MERGE_SHA" ]; then
+            echo "::error::Unable to resolve merge commit for PR #$PR_NUMBER."
+            exit 1
+          fi
+
+          {
+            echo "merge_sha=$MERGE_SHA"
+            echo "title<<EOF"
+            echo "$TITLE"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fetch release branch
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          git fetch origin "$RELEASE_BRANCH"
+
+      - name: Check whether change is already promoted
+        id: promoted
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}
+        run: |
+          if git merge-base --is-ancestor "$MERGE_SHA" "origin/$RELEASE_BRANCH"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "Change is already present in $RELEASE_BRANCH."
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Stop if already promoted
+        if: steps.promoted.outputs.already == 'true'
+        run: |
+          echo "::notice::This change is already included in the active release."
+
+      - name: Configure Git
+        if: steps.promoted.outputs.already == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create promotion branch
+        if: steps.promoted.outputs.already == 'false'
+        id: branch
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          VERSION: ${{ steps.release.outputs.version }}
+          PR_NUMBER: ${{ inputs.pull_request }}
+        run: |
+          PROMOTION_BRANCH="promotion/$VERSION/pr-$PR_NUMBER"
+
+          git checkout -b "$PROMOTION_BRANCH" "origin/$RELEASE_BRANCH"
+
+          echo "name=$PROMOTION_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Cherry-pick original change
+        if: steps.promoted.outputs.already == 'false'
+        env:
+          MERGE_SHA: ${{ steps.pr.outputs.merge_sha }}
+        run: |
+          git cherry-pick "$MERGE_SHA"
+
+      - name: Push promotion branch
+        if: steps.promoted.outputs.already == 'false'
+        env:
+          PROMOTION_BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          git push origin "$PROMOTION_BRANCH"
+
+      - name: Create promotion pull request
+        if: steps.promoted.outputs.already == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pull_request }}
+          ORIGINAL_TITLE: ${{ steps.pr.outputs.title }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          PROMOTION_BRANCH: ${{ steps.branch.outputs.name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          gh pr create \
+            --head "$PROMOTION_BRANCH" \
+            --base "$RELEASE_BRANCH" \
+            --title "promote: #$PR_NUMBER to $VERSION" \
+            --body-file ".github/PULL_REQUEST_TEMPLATE/promotion.md"
