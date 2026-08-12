@@ -1,0 +1,61 @@
+[project]
+authors = [
+  {name = "TrabeculAI contributors"},
+]
+dependencies = []
+description = "Composable AI infrastructure for healthcare."
+license = "Apache-2.0"
+name = "trabeculai"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+version = "0.1.0"
+
+[dependency-groups]
+dev = [
+  "mypy",
+  "pre-commit>=4.6.2",
+  "pytest",
+  "pytest-cov",
+  "ruff",
+]
+
+[build-system]
+build-backend = "uv_build"
+requires = ["uv_build>=0.12.3,<0.13"]
+
+# ==========================================================
+# Pytest
+# ==========================================================
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+
+# ==========================================================
+# Ruff
+# ==========================================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "UP",
+  "B",
+]
+
+# ==========================================================
+# Mypy
+# ==========================================================
+
+[tool.mypy]
+files = [
+  "src",
+  "tests",
+]
+python_version = "3.13"
+strict = true
