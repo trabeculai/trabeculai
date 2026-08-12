@@ -1,0 +1,102 @@
+name: Auto PR Gateway
+
+on:
+  push:
+    branches:
+      - "feature/**"
+      - "fix/**"
+      - "chore/**"
+      - "docs/**"
+      - "hotfix/**"
+      - "promotion/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  auto-pr:
+    name: Auto PR
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve pull request configuration
+        id: config
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          case "$BRANCH" in
+            feature/*)
+              echo "base=dev" >> "$GITHUB_OUTPUT"
+              echo "template=feature.md" >> "$GITHUB_OUTPUT"
+              ;;
+
+            chore/*)
+              echo "base=dev" >> "$GITHUB_OUTPUT"
+              echo "template=chore.md" >> "$GITHUB_OUTPUT"
+              ;;
+
+            docs/*)
+              echo "base=dev" >> "$GITHUB_OUTPUT"
+              echo "template=docs.md" >> "$GITHUB_OUTPUT"
+              ;;
+
+            hotfix/*)
+              echo "base=main" >> "$GITHUB_OUTPUT"
+              echo "template=hotfix.md" >> "$GITHUB_OUTPUT"
+              ;;
+
+            promotion/*)
+              echo "::error::promotion/* branches require an explicit release target."
+              exit 1
+              ;;
+
+            fix/*)
+              if [[ "$BRANCH" =~ ^fix/([0-9]+\.[0-9]+\.[0-9]+)/.+$ ]]; then
+                VERSION="${BASH_REMATCH[1]}"
+                echo "base=release/$VERSION" >> "$GITHUB_OUTPUT"
+              else
+                echo "base=dev" >> "$GITHUB_OUTPUT"
+              fi
+
+              echo "template=fix.md" >> "$GITHUB_OUTPUT"
+              ;;
+
+            *)
+              echo "::error::Unsupported branch: $BRANCH"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check for existing pull request
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          PR_NUMBER="$(
+            gh pr list \
+              --head "$BRANCH" \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        if: steps.existing.outputs.number == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          BASE: ${{ steps.config.outputs.base }}
+          TEMPLATE: ${{ steps.config.outputs.template }}
+        run: |
+          gh pr create \
+            --head "$BRANCH" \
+            --base "$BASE" \
+            --title "$BRANCH" \
+            --body-file ".github/PULL_REQUEST_TEMPLATE/$TEMPLATE"
