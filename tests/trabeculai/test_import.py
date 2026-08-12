@@ -1,5 +1,7 @@
+from importlib.metadata import version
+
 import trabeculai
 
 
-def test_package_version() -> None:
-    assert trabeculai.__version__ == "0.1.0"
+def test_package_import() -> None:
+    assert trabeculai.__version__ == version("trabeculai")
