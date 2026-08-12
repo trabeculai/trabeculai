@@ -1,0 +1,163 @@
+name: Create Release Candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-candidate:
+    name: Release Candidate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve active release
+        id: release
+        run: |
+          RELEASES="$(
+            git ls-remote --heads origin 'release/*' \
+              | awk '{print $2}' \
+              | sed 's#refs/heads/##'
+          )"
+
+          COUNT="$(
+            printf '%s\n' "$RELEASES" \
+              | sed '/^$/d' \
+              | wc -l \
+              | tr -d ' '
+          )"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No active release found."
+            exit 1
+          fi
+
+          if [ "$COUNT" -gt 1 ]; then
+            echo "::error::More than one active release was found:"
+            echo "$RELEASES"
+            exit 1
+          fi
+
+          RELEASE_BRANCH="$RELEASES"
+          VERSION="${RELEASE_BRANCH#release/}"
+
+          echo "branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout active release
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          git fetch origin "$RELEASE_BRANCH"
+          git checkout -B "$RELEASE_BRANCH" "origin/$RELEASE_BRANCH"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Run static analysis
+        run: |
+          uv run --locked ruff check .
+          uv run --locked ruff format --check .
+          uv run --locked mypy src tests
+
+      - name: Run unit tests
+        run: uv run --locked pytest
+
+      - name: Resolve next release candidate
+        id: candidate
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          git fetch --tags --force
+
+          LAST_RC="$(
+            git tag \
+              --list "v${VERSION}rc*" \
+              --sort=-v:refname \
+              | head -n 1
+          )"
+
+          if [ -z "$LAST_RC" ]; then
+            RC_NUMBER=1
+          else
+            RC_NUMBER="${LAST_RC##*rc}"
+            RC_NUMBER=$((RC_NUMBER + 1))
+          fi
+
+          RC_VERSION="${VERSION}rc${RC_NUMBER}"
+          TAG="v${RC_VERSION}"
+
+          echo "version=$RC_VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set package version
+        env:
+          RC_VERSION: ${{ steps.candidate.outputs.version }}
+        run: |
+          uv version "$RC_VERSION"
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Verify wheel exists
+        run: |
+          ls dist/*.whl >/dev/null
+
+      - name: Verify source distribution exists
+        run: |
+          ls dist/*.tar.gz >/dev/null
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit release candidate version
+        env:
+          RC_VERSION: ${{ steps.candidate.outputs.version }}
+        run: |
+          git add pyproject.toml uv.lock
+          git commit -m "chore: prepare v${RC_VERSION}"
+
+      - name: Create release candidate tag
+        env:
+          TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          git tag "$TAG"
+
+      - name: Push release candidate commit and tag
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          git push origin HEAD:"$RELEASE_BRANCH"
+          git push origin "$TAG"
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            dist/* \
+            --prerelease \
+            --generate-notes \
+            --title "$TAG"
