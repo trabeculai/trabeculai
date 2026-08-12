@@ -1,0 +1,126 @@
+name: Engineering Task
+description: Track an engineering, ML, AI, documentation, or research task.
+title: "[Task]: "
+labels: []
+body:
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type
+      description: What kind of work is this?
+      options:
+        - Feature
+        - Bug
+        - ML Experiment
+        - AI / LLM Experiment
+        - Agentic System
+        - MLOps / Infrastructure
+        - Documentation
+        - Research
+        - Refactor
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / Question
+      description: What problem, question, or opportunity are we addressing?
+      placeholder: Describe the problem clearly and provide relevant context.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why is this worth doing?
+      placeholder: Explain the expected value, learning goal, or system impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: ML / System Hypothesis
+      description: >
+        If applicable, describe the measurable hypothesis being tested.
+        Use "Not applicable" when this task does not involve an ML or system hypothesis.
+      placeholder: >
+        Example: Dense retrieval is expected to improve Recall@5 compared with
+        the current BM25 baseline.
+    validations:
+      required: true
+
+  - type: textarea
+    id: approach
+    attributes:
+      label: Proposed Approach
+      description: What approach are we considering?
+      placeholder: Describe the initial implementation or experimentation strategy.
+    validations:
+      required: false
+
+  - type: textarea
+    id: evaluation
+    attributes:
+      label: Evaluation Strategy
+      description: How will we know whether this work was successful?
+      placeholder: |
+        Examples:
+        - unit tests
+        - Recall@K
+        - F1
+        - latency
+        - cost
+        - groundedness
+        - task success
+        - manual validation
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: What conditions must be satisfied before this issue can be considered complete?
+      placeholder: |
+        - Criterion 1
+        - Criterion 2
+        - Criterion 3
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Does this task depend on other issues, models, datasets, services, or decisions?
+      placeholder: Use "None" when there are no known dependencies.
+    validations:
+      required: false
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety / Healthcare Considerations
+      description: >
+        Does this task affect healthcare outputs, medical knowledge, clinical reasoning,
+        safety mechanisms, privacy, or regulatory behavior?
+      placeholder: Use "Not applicable" when appropriate.
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Add relevant papers, documentation, datasets, issues, ADRs, or links.
+      placeholder: |
+        - Paper:
+        - Dataset:
+        - ADR:
+        - Related issue:
+    validations:
+      required: false
