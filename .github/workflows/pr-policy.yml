@@ -70,6 +70,13 @@ jobs:
               fi
               ;;
 
+            mergeback/*)
+              if [ "$BASE_REF" != "dev" ] && [[ ! "$BASE_REF" =~ ^release/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::Merge-back branches may only target dev or a release/x.y.z branch."
+                exit 1
+              fi
+              ;;
+
             dev)
               if [[ ! "$BASE_REF" =~ ^release/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                 echo "::error::dev may only target an active release/x.y.z branch."

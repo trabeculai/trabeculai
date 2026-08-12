@@ -1,0 +1,248 @@
+name: Merge Back
+
+on:
+  pull_request:
+    types:
+      - closed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    name: Resolve Merge Back
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    outputs:
+      enabled: ${{ steps.resolve.outputs.enabled }}
+      merge_sha: ${{ steps.resolve.outputs.merge_sha }}
+      source_pr: ${{ steps.resolve.outputs.source_pr }}
+      source_title: ${{ steps.resolve.outputs.source_title }}
+      target_dev: ${{ steps.resolve.outputs.target_dev }}
+      target_release: ${{ steps.resolve.outputs.target_release }}
+
+    steps:
+      - name: Resolve propagation targets
+        id: resolve
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          ENABLED=false
+          TARGET_DEV=false
+          TARGET_RELEASE=""
+
+          if [[ "$HEAD_REF" =~ ^fix/[0-9]+\.[0-9]+\.[0-9]+/.+$ ]] \
+            && [[ "$BASE_REF" =~ ^release/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+
+            ENABLED=true
+            TARGET_DEV=true
+
+          elif [[ "$HEAD_REF" == hotfix/* ]] && [ "$BASE_REF" = "main" ]; then
+
+            ENABLED=true
+            TARGET_DEV=true
+            TARGET_RELEASE="active"
+
+          fi
+
+          echo "enabled=$ENABLED" >> "$GITHUB_OUTPUT"
+          echo "merge_sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+          echo "source_pr=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "source_title<<EOF"
+            echo "$PR_TITLE"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "target_dev=$TARGET_DEV" >> "$GITHUB_OUTPUT"
+          echo "target_release=$TARGET_RELEASE" >> "$GITHUB_OUTPUT"
+
+  merge-back-dev:
+    name: Merge Back to Dev
+    needs: resolve
+    if: needs.resolve.outputs.enabled == 'true' && needs.resolve.outputs.target_dev == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch source commit
+        env:
+          MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
+        run: |
+          git fetch origin "$MERGE_SHA"
+
+      - name: Create merge-back branch
+        id: branch
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.source_pr }}
+        run: |
+          BRANCH="mergeback/pr-${PR_NUMBER}-to-dev"
+
+          git checkout -b "$BRANCH"
+
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Cherry-pick merged change
+        env:
+          MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
+        run: |
+          git cherry-pick "$MERGE_SHA"
+
+      - name: Push merge-back branch
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          git push origin "$BRANCH"
+
+      - name: Open merge-back pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          PR_NUMBER: ${{ needs.resolve.outputs.source_pr }}
+          SOURCE_TITLE: ${{ needs.resolve.outputs.source_title }}
+        run: |
+          gh pr create \
+            --head "$BRANCH" \
+            --base dev \
+            --title "mergeback: #${PR_NUMBER} to dev" \
+            --body "Propagates the squashed change from PR #${PR_NUMBER} back into \`dev\`.
+
+          Source change:
+          ${SOURCE_TITLE}
+
+          This pull request was created automatically by the Merge Back workflow."
+
+  resolve-active-release:
+    name: Resolve Active Release
+    needs: resolve
+    if: needs.resolve.outputs.enabled == 'true' && needs.resolve.outputs.target_release == 'active'
+    runs-on: ubuntu-latest
+
+    outputs:
+      exists: ${{ steps.release.outputs.exists }}
+      branch: ${{ steps.release.outputs.branch }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve active release
+        id: release
+        run: |
+          RELEASES="$(
+            git ls-remote --heads origin 'release/*' \
+              | awk '{print $2}' \
+              | sed 's#refs/heads/##'
+          )"
+
+          COUNT="$(
+            printf '%s\n' "$RELEASES" \
+              | sed '/^$/d' \
+              | wc -l \
+              | tr -d ' '
+          )"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "branch=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$COUNT" -gt 1 ]; then
+            echo "::error::More than one active release was found:"
+            echo "$RELEASES"
+            exit 1
+          fi
+
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$RELEASES" >> "$GITHUB_OUTPUT"
+
+  merge-back-release:
+    name: Merge Back to Active Release
+    needs:
+      - resolve
+      - resolve-active-release
+    if: needs.resolve-active-release.outputs.exists == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout active release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-active-release.outputs.branch }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch source commit
+        env:
+          MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
+        run: |
+          git fetch origin "$MERGE_SHA"
+
+      - name: Create merge-back branch
+        id: branch
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.source_pr }}
+          RELEASE_BRANCH: ${{ needs.resolve-active-release.outputs.branch }}
+        run: |
+          VERSION="${RELEASE_BRANCH#release/}"
+          BRANCH="mergeback/pr-${PR_NUMBER}-to-${VERSION}"
+
+          git checkout -b "$BRANCH"
+
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Cherry-pick merged change
+        env:
+          MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
+        run: |
+          git cherry-pick "$MERGE_SHA"
+
+      - name: Push merge-back branch
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+        run: |
+          git push origin "$BRANCH"
+
+      - name: Open merge-back pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_BRANCH: ${{ needs.resolve-active-release.outputs.branch }}
+          PR_NUMBER: ${{ needs.resolve.outputs.source_pr }}
+          SOURCE_TITLE: ${{ needs.resolve.outputs.source_title }}
+        run: |
+          gh pr create \
+            --head "$BRANCH" \
+            --base "$RELEASE_BRANCH" \
+            --title "mergeback: #${PR_NUMBER} to ${RELEASE_BRANCH}" \
+            --body "Propagates the squashed hotfix from PR #${PR_NUMBER} into \`${RELEASE_BRANCH}\`.
+
+          Source change:
+          ${SOURCE_TITLE}
+
+          This pull request was created automatically by the Merge Back workflow."
