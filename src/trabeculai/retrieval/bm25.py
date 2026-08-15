@@ -83,7 +83,10 @@ class BM25Retriever:
         return score
 
     def retrieve(self, query: str, top_k: int = 5) -> list[RetrievalResult]:
-        query_tokens = self.tokenize(query)
+        if top_k <= 0:
+            raise ValueError("top_k must be greater than 0")
+
+        query_tokens = list(dict.fromkeys(self.tokenize(query)))
 
         scored_documents = [
             (document, self._score(query_tokens, index))
