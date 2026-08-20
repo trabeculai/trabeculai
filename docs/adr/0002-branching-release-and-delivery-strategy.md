@@ -2,30 +2,49 @@
 
 - Status: Accepted
 - Date: 2026-08-12
+- Last updated: 2026-08-20
 
 ## Context
 
 TrabeculAI needs a development and release workflow that supports:
 
-- continuous development without forcing every approved change into the next release;
-- curated releases;
-- explicit release candidates;
+- continuous development while a release is being stabilized;
+- explicit and reproducible release candidates;
+- traceability between development, release candidates, and stable releases;
 - reproducible Python package artifacts;
-- traceability between pull requests, releases, and published versions;
-- controlled propagation of fixes and hotfixes;
-- a simple workflow suitable for the current project size while remaining extensible.
+- controlled propagation of release fixes and production hotfixes;
+- automated pull request creation without bypassing normal repository checks;
+- a workflow simple enough for the current project size while remaining extensible.
 
-The project uses squash merging so that each pull request becomes one logical commit in its target branch.
+The repository currently supports one active release at a time.
 
-The repository currently has one active release at a time.
+The initial release strategy used selective promotion of individual changes from
+`dev` into `release/x.y.z`.
+
+That model introduced unnecessary coordination and cherry-pick complexity for
+the current project.
+
+The release process therefore uses a release train instead:
+
+- development continues normally in `dev`;
+- an active release periodically receives the current `dev` state;
+- release candidates are immutable snapshots;
+- stable promotion selects an explicit release candidate;
+- production receives exactly the selected candidate, except for stable version
+  metadata.
 
 ## Decision
 
-TrabeculAI uses a curated release model based on the following long-lived branches:
+TrabeculAI uses two persistent integration branches:
 
 - `main`: stable production state;
-- `dev`: integration branch for approved development;
-- `release/x.y.z`: stabilization branch for one specific release.
+- `dev`: integration branch for approved development.
+
+A temporary stabilization branch is created for each release:
+
+- `release/x.y.z`
+
+Only one `release/*` branch may be active at a time.
 
 Short-lived branches include:
 
@@ -35,26 +54,12 @@ Short-lived branches include:
 - `chore/*`
 - `docs/*`
 - `hotfix/*`
-- `promotion/*`
 - `mergeback/*`
-
-## Merge Strategy
-
-The repository uses **Squash and Merge only**.
-
-Merge commits and rebase merging are disabled.
-
-Each pull request represents one logical change and becomes one commit in the target branch.
-
-The pull request title is used as the squash commit message.
-
-This provides a stable unit for selective promotion and merge-back operations.
+- `release-promotion/*`
 
 ## Development Flow
 
 Normal development targets `dev`.
-
-Examples:
 
 ```text
 feature/* ─┐
@@ -63,13 +68,30 @@ chore/*   ─┤──> dev
 docs/*    ─┘
 ````
 
-Changes must enter `dev` through pull requests and pass the configured quality and branch-policy checks.
+Changes enter `dev` through pull requests and must pass the configured quality
+and branch-policy checks.
+
+Normal development pull requests use squash merging so that each pull request
+becomes one logical commit in `dev`.
 
 ## Starting a Release
 
-A release is created explicitly through the `Start Release` GitHub Actions workflow.
+A release is started explicitly through the `Start Release` GitHub Actions
+workflow.
 
-A new release branch is created from `main`:
+The requested version must follow semantic versioning:
+
+```text
+x.y.z
+```
+
+The workflow ensures that no other active release exists and creates:
+
+```text
+release/x.y.z
+```
+
+from the current `main`.
 
 ```text
 main
@@ -77,75 +99,134 @@ main
   └──> release/x.y.z
 ```
 
-A release does not start from `dev`.
+Starting the release from `main` establishes the current production state as the
+initial release baseline.
 
-This guarantees that a release contains the current stable production state plus only changes explicitly selected for that release.
-
-After the release branch is created, a pull request from:
+The workflow then automatically opens:
 
 ```text
 dev → release/x.y.z
 ```
 
-is opened automatically.
+This pull request is the first synchronization of the release train.
 
-This pull request acts as a release queue and visibility mechanism.
+Unlike the previous release model, this pull request is intended to be merged.
 
-It must not be merged directly.
+## Release Train
 
-Its diff represents changes that exist in `dev` but are not yet present in the release.
+While a release is active, `dev` may continue receiving normal development.
 
-## Promotion
+The active release receives development through synchronization pull requests:
 
-Changes are promoted individually from `dev` into the active release.
+```text
+dev → release/x.y.z
+```
 
-Promotion is initiated using the original pull request number.
+These pull requests use **Merge pull request**, not squash merge.
 
-Because normal pull requests are squash merged into `dev`, the original pull request corresponds to one logical commit.
+Preserving the merge relationship makes the synchronized `dev` commit an
+ancestor of the release branch.
 
-The promotion workflow:
+As a result, future synchronization pull requests contain only development that
+has not already entered the release.
+
+```text
+dev
+ │
+ ├──────────────┐
+ │              │
+ ▼              ▼
+new work    release/x.y.z
+ │              ▲
+ └──── sync ────┘
+```
+
+A push to `dev` activates the `Release Queue` workflow.
+
+If an active release exists:
+
+1. the workflow checks whether a `dev → release/x.y.z` pull request is already
+   open;
+2. an existing pull request is left open and automatically follows the new
+   `dev` head;
+3. otherwise, the workflow checks whether `dev` contains commits not present in
+   the release;
+4. when new commits exist, a new synchronization pull request is opened
+   automatically.
+
+Merging a synchronization pull request does not automatically create a release
+candidate.
+
+Release candidate creation remains an explicit decision.
+
+## Merge Strategy
+
+Most repository pull requests use squash merging.
+
+This keeps feature, fix, chore, documentation, hotfix, and merge-back changes as
+logical units.
+
+Release synchronization is the intentional exception:
+
+```text
+dev → release/x.y.z
+```
+
+uses a merge commit.
+
+The release branch therefore allows both merge and squash merging.
+
+This is necessary because the ancestry relationship between `dev` and the
+release branch is part of the release train design.
+
+`main` and `dev` continue to use linear history.
+
+## Release Candidates
+
+Release candidates are explicit and immutable snapshots of an active release.
+
+The `Create Release Candidate` workflow:
 
 1. resolves the active `release/x.y.z`;
-2. resolves the squash commit associated with the selected pull request;
-3. creates a `promotion/x.y.z/pr-N` branch from the release;
-4. cherry-picks the selected logical change;
-5. opens a pull request into `release/x.y.z`.
+2. runs the quality gateway;
+3. determines the next RC number;
+4. changes the package version locally to `x.y.zrcN`;
+5. builds the wheel and source distribution;
+6. creates a local commit containing the RC version metadata;
+7. creates an immutable tag such as `vx.y.zrcN`;
+8. pushes only the tag;
+9. creates a GitHub prerelease containing the built artifacts.
 
 Example:
 
 ```text
-feature/foo
-    │
-    ▼
-   dev
-    │
-    │ Promote PR #42
-    ▼
-promotion/0.2.0/pr-42
-    │
-    ▼
+release/0.2.0
+      │
+      │ source snapshot
+      ▼
+local RC version commit
+      │
+      ▼
+v0.2.0rc1
+```
+
+The RC version commit is **not pushed into the release branch**.
+
+Therefore:
+
+```text
 release/0.2.0
 ```
 
-This allows a release to include selected changes from `dev` without including all current development.
+remains a clean stabilization branch containing actual release changes rather
+than RC-specific version commits.
 
-## Release Candidates
+The RC tag points to the versioned snapshot.
 
-Release candidates are explicit, immutable snapshots of the current release branch.
+Its parent identifies the exact release commit from which that candidate was
+created.
 
-The `Create Release Candidate` workflow:
-
-1. identifies the active release;
-2. validates the release;
-3. runs static analysis and unit tests;
-4. determines the next RC number;
-5. updates the package version to `x.y.zrcN`;
-6. builds the Python wheel and source distribution;
-7. commits the RC version to the release branch;
-8. creates an immutable tag such as `v0.2.0rc1`;
-9. creates a GitHub pre-release containing the package artifacts.
-
-Examples:
+Multiple release candidates may be created:
 
 ```text
 v0.2.0rc1
@@ -153,45 +234,118 @@ v0.2.0rc2
 v0.2.0rc3
 ```
 
-Failed or superseded release candidates are never rewritten or deleted as part of the normal release process.
+Failed or superseded release candidates are never rewritten as part of the
+normal release process.
 
-## Stable Release
+## Stable Promotion
 
-When the active release is approved for production, the `Promote Release` workflow:
+Stable promotion always selects an explicit release candidate.
 
-1. verifies that at least one release candidate exists;
-2. validates the release branch;
-3. updates the package version from `x.y.zrcN` to `x.y.z`;
-4. opens a pull request:
+The `Promote Release` workflow receives:
 
 ```text
-release/x.y.z → main
+vx.y.zrcN
 ```
 
-The release is not published merely because this pull request exists.
+and verifies that the candidate belongs to the active release.
 
-The stable release only becomes publishable after the pull request is approved and squash merged into `main`.
+The workflow checks out the immutable RC and creates:
+
+```text
+release-promotion/x.y.z/from-vx.y.zrcN
+```
+
+directly from that candidate.
+
+The package version is then changed from:
+
+```text
+x.y.zrcN
+```
+
+to:
+
+```text
+x.y.z
+```
+
+The stable version change is committed to the promotion branch.
+
+The TrabeculAI Release Bot pushes the branch and automatically opens:
+
+```text
+release-promotion/x.y.z/from-vx.y.zrcN
+                         │
+                         ▼
+                        main
+```
+
+The promotion pull request passes the same repository policies and quality
+checks as other pull requests.
+
+The release branch itself is never merged directly into `main`.
+
+This guarantees that the stable promotion has an explicit immutable RC as its
+source.
 
 ## Publishing
 
-A stable package is published only after the release reaches `main`.
+A push to `main` does not automatically imply a release.
 
-The publish workflow:
+The `Publish Release` workflow first determines whether the new `main` commit
+was produced by a merged `release-promotion/*` pull request.
 
-1. detects the stable release commit;
-2. reads the package version from `pyproject.toml`;
-3. builds wheel and source distribution artifacts;
-4. installs and verifies the generated wheel in a clean environment;
+If not, no release is published.
+
+For a valid release promotion, the workflow verifies:
+
+1. the selected RC tag exists;
+2. the promotion pull request corresponds to the expected promotion branch;
+3. the promotion branch was created directly from the selected RC;
+4. the release snapshot from which the RC was created belongs to the active
+   release;
+5. only `pyproject.toml` and `uv.lock` changed between the RC and its stable
+   promotion;
+6. the tree merged into `main` is identical to the promotion tree;
+7. the package version equals the expected stable version.
+
+The workflow then:
+
+1. runs the complete quality gateway;
+2. builds the wheel and source distribution;
+3. installs the generated wheel in a clean environment;
+4. verifies that the installed package can be imported;
 5. creates the immutable stable tag `vx.y.z`;
-6. creates the corresponding GitHub Release and attaches the artifacts.
+6. creates the corresponding GitHub Release;
+7. attaches the generated artifacts;
+8. closes remaining pull requests targeting the completed release;
+9. deletes the completed `release/x.y.z` branch.
 
-`pyproject.toml` is the single source of truth for the package version.
+```text
+RC
+ │
+ ▼
+release-promotion/*
+ │
+ ▼
+main
+ │
+ ├── quality
+ ├── build
+ ├── installation test
+ ├── vx.y.z
+ ├── GitHub Release
+ └── close release/x.y.z
+```
 
-Runtime access to `trabeculai.__version__` is derived from installed package metadata.
+`pyproject.toml` remains the source of truth for the package version.
+
+Runtime access to `trabeculai.__version__` is derived from installed package
+metadata.
 
 ## Release Fixes
 
-A fix discovered while stabilizing a release uses:
+A fix discovered while stabilizing an active release uses:
 
 ```text
 fix/x.y.z/*
@@ -203,8 +357,6 @@ and targets:
 release/x.y.z
 ```
 
-After the fix is squash merged into the release, its logical commit is propagated back to `dev` using a merge-back pull request.
-
 Example:
 
 ```text
@@ -213,8 +365,15 @@ fix/0.2.0/foo
       ▼
 release/0.2.0
       │
-      └──> mergeback/* → dev
+      ▼
+mergeback/* → dev
 ```
+
+After the fix is merged into the release, the `Merge Back` workflow propagates
+the change back to `dev` through a pull request.
+
+The workflow supports both squash commits and merge commits when extracting the
+merged change.
 
 This prevents release-only fixes from being lost in future development.
 
@@ -226,14 +385,17 @@ Production hotfixes use:
 hotfix/*
 ```
 
-and target `main`.
+and target:
 
-After the hotfix is squash merged into `main`, the same logical change is propagated through merge-back pull requests to:
+```text
+main
+```
+
+After a hotfix reaches `main`, the change is propagated through merge-back pull
+requests to:
 
 * `dev`;
-* the active `release/x.y.z`, if one exists.
-
-Example:
+* the active `release/x.y.z`, when one exists.
 
 ```text
 hotfix/foo
@@ -241,85 +403,211 @@ hotfix/foo
     ▼
    main
     │
-    ├──> dev
+    ├──> mergeback/* → dev
     │
-    └──> release/x.y.z
+    └──> mergeback/* → release/x.y.z
 ```
 
 ## Merge-Back
 
-Merge-back is performed through pull requests, not direct pushes.
+Merge-back always happens through pull requests rather than direct pushes into
+protected integration branches.
 
-This ensures propagated fixes pass the same quality and policy gates as normal development.
+The workflow:
 
-The final release merge:
+1. resolves the merged source change;
+2. creates a temporary `mergeback/*` branch;
+3. cherry-picks the logical change;
+4. pushes the temporary branch;
+5. automatically opens the appropriate pull request.
+
+If the source SHA is a normal or squash commit, a normal cherry-pick is used.
+
+If the source SHA is a merge commit, the first parent is used as the mainline so
+that the change introduced into the original base branch is propagated.
+
+Merge-back pull requests pass normal branch and quality policies.
+
+The complete release is not merged back into `dev`.
+
+Development changes already originated in `dev`, and release fixes are
+propagated individually.
+
+RC and stable-version metadata therefore do not leak back into development.
+
+## Automated Pull Requests
+
+TrabeculAI uses a dedicated GitHub App identity for workflows that create pull
+requests automatically.
+
+The Release Bot is used by workflows such as:
+
+```text
+Auto PR Gateway
+Start Release
+Release Queue
+Promote Release
+Merge Back
+```
+
+The App uses short-lived installation tokens generated during workflow
+execution.
+
+Repository variables and secrets provide the App credentials required to
+generate these tokens.
+
+Automated branches and pull requests therefore have an explicit automation
+identity while still passing the repository's normal pull request checks.
+
+The regular GitHub Actions token remains appropriate for internal operations
+that do not need to initiate a new pull request lifecycle, such as creating
+release tags or GitHub Releases.
+
+## Branch Policy
+
+Expected source and target relationships are:
+
+```text
+feature/*                 → dev
+chore/*                   → dev
+docs/*                    → dev
+fix/*                     → dev
+fix/x.y.z/*               → release/x.y.z
+hotfix/*                  → main
+mergeback/*               → dev or release/x.y.z
+dev                       → release/x.y.z
+release-promotion/*       → main
+```
+
+Direct:
 
 ```text
 release/x.y.z → main
 ```
 
-is not merged back wholesale into `dev`.
+pull requests are prohibited.
 
-Changes originally promoted into the release already came from `dev`, and stabilization fixes are propagated individually.
-
-Avoiding a full release merge-back prevents duplicate commits, release-version changes, and RC-specific history from leaking into `dev`.
-
-## Branch Policy
-
-The expected branch targets are:
-
-```text
-feature/*          → dev
-chore/*            → dev
-docs/*             → dev
-fix/*              → dev
-fix/x.y.z/*        → release/x.y.z
-hotfix/*           → main
-promotion/*        → release/x.y.z
-mergeback/*        → dev or release/x.y.z
-release/x.y.z      → main
-dev                 → release/x.y.z (release queue only)
-```
+Stable releases must pass through an explicit tagged release candidate and a
+`release-promotion/*` branch.
 
 Branch-target rules are enforced by CI.
 
-Documentation-only branches are additionally restricted to documentation-related paths.
+Documentation-only branches are additionally restricted to documentation-related
+paths.
 
 ## Protected Branches
 
 `main`, `dev`, and `release/*` are protected.
 
-They require:
+`main` and `dev` require normal pull request and quality gates and preserve
+linear history.
 
-* pull requests;
-* successful static analysis;
-* successful unit tests;
-* successful branch-policy validation;
-* linear history;
-* protection against force pushes;
-* protection against deletion.
+The active `release/*` branch also requires pull requests and quality gates, but
+its protection differs intentionally:
 
-Required human approval may be added later when the contributor model makes it useful.
+* merge commits are allowed so `dev → release/*` synchronization can preserve
+  ancestry;
+* squash merging remains available for normal release fixes;
+* force pushes are prohibited;
+* deletion is allowed so a completed release branch can be closed by the
+  publication workflow.
+
+Required human approval may be added later when the contributor model makes it
+useful.
+
+## Release Lifecycle
+
+The complete lifecycle is:
+
+```text
+                         feature/*
+                             │
+                             ▼
+                            dev
+                             │
+                  active release?
+                             │
+                            yes
+                             ▼
+                   dev → release/x.y.z
+                             │
+                     Merge pull request
+                             │
+                             ▼
+                      release/x.y.z
+                             │
+                   Create Release Candidate
+                             │
+                             ▼
+                         vx.y.zrc1
+                             │
+                    more changes needed?
+                       │             │
+                      yes            no
+                       │             │
+                       ▼             │
+                      dev            │
+                       │             │
+                       ▼             │
+                dev → release        │
+                       │             │
+                       ▼             │
+                release/x.y.z        │
+                       │             │
+                       ▼             │
+                  vx.y.zrc2          │
+                       │             │
+                       └──────┬──────┘
+                              ▼
+                     select explicit RC
+                              │
+                              ▼
+                 release-promotion/*
+                              │
+                              ▼
+                            main
+                              │
+                              ▼
+                       Publish Release
+                              │
+                 ┌────────────┼────────────┐
+                 ▼            ▼            ▼
+               vx.y.z     GitHub Release  close
+                                        release/*
+```
 
 ## Consequences
 
 ### Positive
 
-* Releases are curated rather than snapshots of `dev`.
-* Each PR is a clear logical unit.
-* Release candidates are immutable and traceable.
-* Production artifacts correspond to explicit Git tags.
-* Release fixes and production hotfixes are propagated without broad branch merges.
 * `dev` can continue moving while a release is stabilized.
-* The process remains suitable for a small project while modeling professional delivery practices.
+* Release synchronization is simple and visible through pull requests.
+* Git ancestry records which development snapshots entered a release.
+* Selective cherry-pick promotion is no longer required for normal development.
+* Release candidates are immutable and explicitly selectable.
+* RC version metadata does not mutate the release branch.
+* Stable production artifacts correspond to a specific selected RC.
+* Publication validates the relationship between RC, promotion, and `main`.
+* Release fixes and production hotfixes are propagated without broad branch
+  merges.
+* Automated pull requests retain normal CI and policy validation.
+* Production artifacts correspond to explicit immutable Git tags.
 
 ### Trade-offs
 
-* Selective promotion requires cherry-picking logical commits.
-* The workflow contains more automation than a simple GitHub Flow model.
-* Release branches temporarily diverge from `dev`.
-* RC version commits exist only in release history.
-* Automation must carefully avoid propagation loops.
+* An active release follows the release train rather than selecting individual
+  `dev` commits.
+* Changes merged into `dev` are therefore candidates for synchronization into
+  the active release.
+* `dev → release/*` requires merge commits while most other repository pull
+  requests use squash merging.
+* Release workflows contain more validation logic than a simple GitHub Flow
+  model.
+* RC commits exist outside the release branch and are reachable through their
+  immutable tags.
+* Automation must maintain the invariant that only one release is active at a
+  time.
+* Merge-back automation must correctly handle both squash and merge commits.
 
 ## Future Considerations
 
@@ -332,5 +620,5 @@ The following may evolve as the project grows:
 * automated changelog generation;
 * signed tags and provenance;
 * artifact attestations;
-* extracting larger CI policies into tested Python tooling;
-* richer release metadata and promotion tracking.
+* stronger release metadata and provenance tracking;
+* extracting larger CI policies into tested Python tooling.

@@ -56,18 +56,30 @@ jobs:
               fi
               ;;
 
-            promotion/*)
-              if [[ ! "$BASE_REF" =~ ^release/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                echo "::error::Promotion branches must target a release/x.y.z branch."
+            release-promotion/*)
+              if [ "$BASE_REF" != "main" ]; then
+                echo "::error::Release promotion branches must target main."
+                exit 1
+              fi
+
+              if [[ ! "$HEAD_REF" =~ ^release-promotion/([0-9]+\.[0-9]+\.[0-9]+)/from-v([0-9]+\.[0-9]+\.[0-9]+)rc([1-9][0-9]*)$ ]]; then
+                echo "::error::Invalid release promotion branch format: '$HEAD_REF'."
+                exit 1
+              fi
+
+              VERSION="${BASH_REMATCH[1]}"
+              RC_VERSION="${BASH_REMATCH[2]}"
+
+              if [ "$VERSION" != "$RC_VERSION" ]; then
+                echo "::error::Release version '$VERSION' does not match RC version '$RC_VERSION'."
                 exit 1
               fi
               ;;
 
             release/*)
-              if [ "$BASE_REF" != "main" ] && [ "$BASE_REF" != "dev" ]; then
-                echo "::error::Release branches may only target main or dev."
-                exit 1
-              fi
+              echo "::error::Release branches must not be merged directly."
+              echo "::error::Promote a tagged release candidate through a release-promotion/* branch."
+              exit 1
               ;;
 
             mergeback/*)
@@ -85,8 +97,8 @@ jobs:
               ;;
 
             *)
-              echo "::error::Unsupported branch prefix: '$HEAD_REF'."
-              echo "Allowed prefixes: feature/, fix/, chore/, docs/, hotfix/, promotion/, release/."
+              echo "::error::Unsupported source branch: '$HEAD_REF'."
+              echo "Allowed sources: feature/*, fix/*, chore/*, docs/*, hotfix/*, release-promotion/*, mergeback/*, or dev."
               exit 1
               ;;
           esac
@@ -100,7 +112,7 @@ jobs:
 
     steps:
       - name: Checkout pull request branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0

@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -30,14 +30,12 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
-      - name: Ruff lint
-        run: uv run --locked ruff check .
-
-      - name: Ruff formatting
-        run: uv run --locked ruff format --check .
-
-      - name: Mypy
-        run: uv run --locked mypy src tests
+      - name: Run static analysis
+        run: >
+          uv run --locked python scripts/quality.py
+          ruff-lint
+          ruff-format
+          mypy
 
   unit-tests:
     name: Unit Tests
@@ -45,7 +43,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -59,4 +57,4 @@ jobs:
         run: uv sync --locked
 
       - name: Run unit tests
-        run: uv run --locked pytest
+        run: uv run --locked python scripts/quality.py pytest

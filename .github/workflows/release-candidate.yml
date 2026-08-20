@@ -6,6 +6,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-candidate
+  cancel-in-progress: false
+
 jobs:
   release-candidate:
     name: Release Candidate
@@ -13,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
@@ -21,31 +25,24 @@ jobs:
       - name: Resolve active release
         id: release
         run: |
-          RELEASES="$(
+          mapfile -t ACTIVE_RELEASES < <(
             git ls-remote --heads origin 'release/*' \
               | awk '{print $2}' \
               | sed 's#refs/heads/##'
-          )"
+          )
 
-          COUNT="$(
-            printf '%s\n' "$RELEASES" \
-              | sed '/^$/d' \
-              | wc -l \
-              | tr -d ' '
-          )"
-
-          if [ "$COUNT" -eq 0 ]; then
+          if [ "${#ACTIVE_RELEASES[@]}" -eq 0 ]; then
             echo "::error::No active release found."
             exit 1
           fi
 
-          if [ "$COUNT" -gt 1 ]; then
-            echo "::error::More than one active release was found:"
-            echo "$RELEASES"
+          if [ "${#ACTIVE_RELEASES[@]}" -gt 1 ]; then
+            echo "::error::Multiple active releases found:"
+            printf '%s\n' "${ACTIVE_RELEASES[@]}"
             exit 1
           fi
 
-          RELEASE_BRANCH="$RELEASES"
+          RELEASE_BRANCH="${ACTIVE_RELEASES[0]}"
           VERSION="${RELEASE_BRANCH#release/}"
 
           echo "branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
@@ -69,14 +66,8 @@ jobs:
       - name: Sync dependencies
         run: uv sync --locked
 
-      - name: Run static analysis
-        run: |
-          uv run --locked ruff check .
-          uv run --locked ruff format --check .
-          uv run --locked mypy src tests
-
-      - name: Run unit tests
-        run: uv run --locked pytest
+      - name: Run quality gateway
+        run: uv run --locked python scripts/quality.py all
 
       - name: Resolve next release candidate
         id: candidate
@@ -119,11 +110,11 @@ jobs:
 
       - name: Verify wheel exists
         run: |
-          ls dist/*.whl >/dev/null
+          test -n "$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
 
       - name: Verify source distribution exists
         run: |
-          ls dist/*.tar.gz >/dev/null
+          test -n "$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
 
       - name: Configure Git
         run: |
@@ -131,11 +122,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Commit release candidate version
+        id: commit
         env:
           RC_VERSION: ${{ steps.candidate.outputs.version }}
         run: |
           git add pyproject.toml uv.lock
           git commit -m "chore: prepare v${RC_VERSION}"
+
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Create release candidate tag
         env:
@@ -143,12 +137,10 @@ jobs:
         run: |
           git tag "$TAG"
 
-      - name: Push release candidate commit and tag
+      - name: Push release candidate tag
         env:
-          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
           TAG: ${{ steps.candidate.outputs.tag }}
         run: |
-          git push origin HEAD:"$RELEASE_BRANCH"
           git push origin "$TAG"
 
       - name: Create GitHub prerelease
@@ -158,6 +150,23 @@ jobs:
         run: |
           gh release create "$TAG" \
             dist/* \
+            --verify-tag \
             --prerelease \
             --generate-notes \
             --title "$TAG"
+
+      - name: Write release candidate summary
+        env:
+          TAG: ${{ steps.candidate.outputs.tag }}
+          SHA: ${{ steps.commit.outputs.sha }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          {
+            echo "## Release Candidate"
+            echo
+            echo "- Tag: \`$TAG\`"
+            echo "- Commit: \`$SHA\`"
+            echo "- Source branch: \`$RELEASE_BRANCH\`"
+            echo
+            echo "The release branch was not modified."
+          } >> "$GITHUB_STEP_SUMMARY"

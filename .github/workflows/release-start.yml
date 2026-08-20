@@ -9,8 +9,7 @@ on:
         type: string
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   start-release:
@@ -30,11 +29,19 @@ jobs:
 
           echo "release_branch=release/$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Generate release bot token
+        id: release-bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
       - name: Checkout main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ steps.release-bot.outputs.token }}
 
       - name: Ensure release branch does not already exist
         env:
@@ -47,15 +54,15 @@ jobs:
 
       - name: Ensure no active release exists
         run: |
-          ACTIVE_RELEASES="$(
+          mapfile -t ACTIVE_RELEASES < <(
             git ls-remote --heads origin 'release/*' \
               | awk '{print $2}' \
               | sed 's#refs/heads/##'
-          )"
+          )
 
-          if [ -n "$ACTIVE_RELEASES" ]; then
+          if [ "${#ACTIVE_RELEASES[@]}" -gt 0 ]; then
             echo "::error::An active release already exists:"
-            echo "$ACTIVE_RELEASES"
+            printf '%s\n' "${ACTIVE_RELEASES[@]}"
             exit 1
           fi
 
@@ -63,21 +70,33 @@ jobs:
         env:
           RELEASE_BRANCH: ${{ steps.version.outputs.release_branch }}
         run: |
-          git checkout -b "$RELEASE_BRANCH"
+          git switch -c "$RELEASE_BRANCH"
           git push origin "$RELEASE_BRANCH"
 
-      - name: Open release queue pull request
+      - name: Open release train pull request
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-bot.outputs.token }}
           VERSION: ${{ inputs.version }}
           RELEASE_BRANCH: ${{ steps.version.outputs.release_branch }}
         run: |
           gh pr create \
             --head dev \
             --base "$RELEASE_BRANCH" \
-            --title "release: queue for $VERSION" \
-            --body "Tracks changes currently available in \`dev\` but not yet promoted to \`$RELEASE_BRANCH\`.
+            --title "release: sync dev into $VERSION" \
+            --body "Synchronizes the current \`dev\` snapshot into \`$RELEASE_BRANCH\`.
 
-          This pull request is informational and must not be merged directly.
+          Merge this pull request to include all changes currently available in \`dev\` in release \`$VERSION\`.
 
-          Changes should enter this release through explicit promotion pull requests."
+          ## Merge strategy
+
+          Use **Merge pull request** for this PR instead of squash merge.
+
+          This preserves the relationship between \`dev\` and the release branch so future synchronization PRs contain only new changes.
+
+          ## Release candidate
+
+          Merging this PR does not automatically create a release candidate.
+
+          When the release branch reaches a candidate state, run the **Create Release Candidate** workflow to create an immutable RC snapshot.
+
+          If \`dev\` advances after this PR is merged, a new synchronization PR will be opened automatically."
