@@ -2,10 +2,14 @@ name: Promote Release
 
 on:
   workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: "Release candidate tag to promote (example: v0.1.0rc1)"
+        required: true
+        type: string
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   promote-release:
@@ -13,74 +17,101 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Generate release bot token
+        id: release-bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ steps.release-bot.outputs.token }}
 
       - name: Resolve active release
         id: release
         run: |
-          RELEASES="$(
+          mapfile -t ACTIVE_RELEASES < <(
             git ls-remote --heads origin 'release/*' \
               | awk '{print $2}' \
               | sed 's#refs/heads/##'
-          )"
+          )
 
-          COUNT="$(
-            printf '%s\n' "$RELEASES" \
-              | sed '/^$/d' \
-              | wc -l \
-              | tr -d ' '
-          )"
-
-          if [ "$COUNT" -eq 0 ]; then
+          if [ "${#ACTIVE_RELEASES[@]}" -eq 0 ]; then
             echo "::error::No active release found."
             exit 1
           fi
 
-          if [ "$COUNT" -gt 1 ]; then
-            echo "::error::More than one active release was found:"
-            echo "$RELEASES"
+          if [ "${#ACTIVE_RELEASES[@]}" -gt 1 ]; then
+            echo "::error::Multiple active releases found:"
+            printf '%s\n' "${ACTIVE_RELEASES[@]}"
             exit 1
           fi
 
-          RELEASE_BRANCH="$RELEASES"
+          RELEASE_BRANCH="${ACTIVE_RELEASES[0]}"
           VERSION="${RELEASE_BRANCH#release/}"
 
           echo "branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout active release
+      - name: Fetch release and tags
         env:
           RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
         run: |
           git fetch origin "$RELEASE_BRANCH"
-          git checkout -B "$RELEASE_BRANCH" "origin/$RELEASE_BRANCH"
-
-      - name: Verify release candidate exists
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
           git fetch --tags --force
 
-          LAST_RC="$(
-            git tag \
-              --list "v${VERSION}rc*" \
-              --sort=-v:refname \
-              | head -n 1
-          )"
+      - name: Validate release candidate
+        id: candidate
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          EXPECTED_PREFIX="v${VERSION}rc"
 
-          if [ -z "$LAST_RC" ]; then
-            echo "::error::No release candidate exists for version $VERSION."
+          if [[ "$RC_TAG" != "$EXPECTED_PREFIX"* ]]; then
+            echo "::error::$RC_TAG does not belong to release $VERSION."
             exit 1
           fi
 
-          echo "Latest release candidate: $LAST_RC"
+          RC_NUMBER="${RC_TAG#$EXPECTED_PREFIX}"
+
+          if [[ ! "$RC_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Invalid release candidate tag: $RC_TAG"
+            exit 1
+          fi
+
+          if ! git rev-parse --verify "refs/tags/$RC_TAG^{commit}" >/dev/null 2>&1; then
+            echo "::error::Release candidate tag '$RC_TAG' does not exist."
+            exit 1
+          fi
+
+          RC_COMMIT="$(git rev-parse "$RC_TAG^{commit}")"
+          SOURCE_COMMIT="$(git rev-parse "${RC_TAG}^{commit}^")"
+
+          if ! git merge-base --is-ancestor \
+            "$SOURCE_COMMIT" \
+            "origin/$RELEASE_BRANCH"; then
+            echo "::error::$RC_TAG was not created from the active release."
+            exit 1
+          fi
+
+          echo "tag=$RC_TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$RC_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release candidate
+        env:
+          RC_TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          git checkout "$RC_TAG"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           enable-cache: true
 
@@ -92,6 +123,25 @@ jobs:
 
       - name: Run quality gateway
         run: uv run --locked python scripts/quality.py all
+
+      - name: Create promotion branch
+        id: promotion
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          RC_TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          PROMOTION_BRANCH="release-promotion/${VERSION}/from-${RC_TAG}"
+
+          if git ls-remote \
+            --exit-code \
+            --heads origin "$PROMOTION_BRANCH" >/dev/null 2>&1; then
+            echo "::error::Promotion branch '$PROMOTION_BRANCH' already exists."
+            exit 1
+          fi
+
+          git switch -c "$PROMOTION_BRANCH"
+
+          echo "branch=$PROMOTION_BRANCH" >> "$GITHUB_OUTPUT"
 
       - name: Set stable package version
         env:
@@ -110,47 +160,59 @@ jobs:
       - name: Commit stable version
         env:
           VERSION: ${{ steps.release.outputs.version }}
+          RC_TAG: ${{ steps.candidate.outputs.tag }}
         run: |
           git add pyproject.toml uv.lock
+          git commit -m "chore: promote ${RC_TAG} to v${VERSION}"
 
-          if git diff --cached --quiet; then
-            echo "Version is already stable."
-          else
-            git commit -m "chore: prepare v${VERSION}"
-          fi
-
-      - name: Push stable version
+      - name: Push promotion branch
         env:
-          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          PROMOTION_BRANCH: ${{ steps.promotion.outputs.branch }}
         run: |
-          git push origin HEAD:"$RELEASE_BRANCH"
+          git push origin "$PROMOTION_BRANCH"
 
-      - name: Check for existing release pull request
-        id: existing
+      - name: Open release promotion pull request
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
-        run: |
-          PR_NUMBER="$(
-            gh pr list \
-              --head "$RELEASE_BRANCH" \
-              --base main \
-              --state open \
-              --json number \
-              --jq '.[0].number // empty'
-          )"
-
-          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-
-      - name: Create release pull request
-        if: steps.existing.outputs.number == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+          GH_TOKEN: ${{ steps.release-bot.outputs.token }}
           VERSION: ${{ steps.release.outputs.version }}
+          RC_TAG: ${{ steps.candidate.outputs.tag }}
+          RC_SHA: ${{ steps.candidate.outputs.sha }}
+          PROMOTION_BRANCH: ${{ steps.promotion.outputs.branch }}
         run: |
           gh pr create \
-            --head "$RELEASE_BRANCH" \
+            --head "$PROMOTION_BRANCH" \
             --base main \
             --title "release: v$VERSION" \
-            --body-file ".github/PULL_REQUEST_TEMPLATE/release.md"
+            --body "Promotes release candidate \`$RC_TAG\` to stable release \`v$VERSION\`.
+
+          ## Source
+
+          - Release candidate: \`$RC_TAG\`
+          - RC commit: \`$RC_SHA\`
+          - Promotion branch: \`$PROMOTION_BRANCH\`
+
+          ## Promotion
+
+          This pull request was created automatically by the TrabeculAI Release Bot.
+
+          The release candidate source is immutable. The only intentional change introduced by this promotion is the package version transition from \`$RC_TAG\` to \`v$VERSION\`.
+
+          Merging this pull request into \`main\` triggers the stable release publication workflow."
+
+      - name: Write promotion summary
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          RC_TAG: ${{ steps.candidate.outputs.tag }}
+          RC_SHA: ${{ steps.candidate.outputs.sha }}
+          PROMOTION_BRANCH: ${{ steps.promotion.outputs.branch }}
+        run: |
+          {
+            echo "## Release Promotion"
+            echo
+            echo "- Release candidate: \`$RC_TAG\`"
+            echo "- RC commit: \`$RC_SHA\`"
+            echo "- Stable version: \`v$VERSION\`"
+            echo "- Promotion branch: \`$PROMOTION_BRANCH\`"
+            echo
+            echo "Promotion pull request created automatically."
+          } >> "$GITHUB_STEP_SUMMARY"

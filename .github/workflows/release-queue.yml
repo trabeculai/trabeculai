@@ -1,0 +1,132 @@
+name: Release Queue
+
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  contents: read
+
+jobs:
+  sync-release:
+    name: Sync Active Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout dev
+        uses: actions/checkout@v6
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Resolve active release
+        id: release
+        run: |
+          mapfile -t ACTIVE_RELEASES < <(
+            git ls-remote --heads origin 'release/*' \
+              | awk '{print $2}' \
+              | sed 's#refs/heads/##'
+          )
+
+          if [ "${#ACTIVE_RELEASES[@]}" -eq 0 ]; then
+            echo "No active release found."
+            echo "active=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${#ACTIVE_RELEASES[@]}" -gt 1 ]; then
+            echo "::error::Multiple active releases found:"
+            printf '%s\n' "${ACTIVE_RELEASES[@]}"
+            exit 1
+          fi
+
+          RELEASE_BRANCH="${ACTIVE_RELEASES[0]}"
+
+          echo "Active release: $RELEASE_BRANCH"
+          echo "active=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$RELEASE_BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Generate release bot token
+        if: steps.release.outputs.active == 'true'
+        id: release-bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
+      - name: Check for existing release sync pull request
+        if: steps.release.outputs.active == 'true'
+        id: existing
+        env:
+          GH_TOKEN: ${{ steps.release-bot.outputs.token }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          PR_NUMBER="$(
+            gh pr list \
+              --head dev \
+              --base "$RELEASE_BRANCH" \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Release sync pull request already exists: #$PR_NUMBER"
+          fi
+
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Check for new dev commits
+        if: >
+          steps.release.outputs.active == 'true' &&
+          steps.existing.outputs.number == ''
+        id: changes
+        env:
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          git fetch origin "$RELEASE_BRANCH"
+
+          AHEAD_COUNT="$(
+            git rev-list \
+              --count \
+              "origin/$RELEASE_BRANCH..origin/dev"
+          )"
+
+          echo "dev is $AHEAD_COUNT commit(s) ahead of $RELEASE_BRANCH."
+
+          if [ "$AHEAD_COUNT" -gt 0 ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open release sync pull request
+        if: steps.changes.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ steps.release-bot.outputs.token }}
+          RELEASE_BRANCH: ${{ steps.release.outputs.branch }}
+        run: |
+          VERSION="${RELEASE_BRANCH#release/}"
+
+          gh pr create \
+            --head dev \
+            --base "$RELEASE_BRANCH" \
+            --title "release: sync dev into $VERSION" \
+            --body "Synchronizes the current \`dev\` snapshot into \`$RELEASE_BRANCH\`.
+
+          Merge this pull request to include all changes currently available in \`dev\` in release \`$VERSION\`.
+
+          ## Merge strategy
+
+          Use **Merge pull request** for this PR instead of squash merge.
+
+          This preserves the relationship between \`dev\` and the release branch so future synchronization PRs contain only new changes.
+
+          ## Release candidate
+
+          Merging this PR does not automatically create a release candidate.
+
+          When the release branch reaches a candidate state, run the **Create Release Candidate** workflow to create an immutable RC snapshot.
+
+          If \`dev\` advances after this PR is merged, this workflow will automatically open a new synchronization pull request."
