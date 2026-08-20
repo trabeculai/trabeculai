@@ -34,17 +34,6 @@ def rr(results: Sequence[RetrievalResult], relevant_document_ids: set[str]) -> f
     return 0.0
 
 
-def mrr(rankings: Sequence[tuple[Sequence[RetrievalResult], set[str]]]) -> float:
-    if not rankings:
-        raise ValueError("rankings must not be empty")
-
-    reciprocal_ranks = [
-        rr(results, relevant_document_ids) for results, relevant_document_ids in rankings
-    ]
-
-    return sum(reciprocal_ranks) / len(reciprocal_ranks)
-
-
 def _ndcg_at_k_gain(
     relevance: float,
     method: Literal["linear", "exponential"],
