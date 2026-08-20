@@ -44,3 +44,12 @@ def test_queries_have_unique_ids() -> None:
     ids = [query.id for query in dataset.queries]
 
     assert len(ids) == len(set(ids))
+
+
+def test_every_query_has_relevant_document() -> None:
+    dataset = load_evaluation_dataset(DATASET_PATH)
+
+    query_ids_with_relevance = {qrel.query_id for qrel in dataset.qrels if qrel.relevance > 0}
+
+    for query in dataset.queries:
+        assert query.id in query_ids_with_relevance
