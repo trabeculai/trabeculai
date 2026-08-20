@@ -8,11 +8,9 @@ on:
       - "chore/**"
       - "docs/**"
       - "hotfix/**"
-      - "promotion/**"
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   auto-pr:
@@ -46,11 +44,6 @@ jobs:
               echo "template=hotfix.md" >> "$GITHUB_OUTPUT"
               ;;
 
-            promotion/*)
-              echo "::error::promotion/* branches require an explicit release target."
-              exit 1
-              ;;
-
             fix/*)
               if [[ "$BRANCH" =~ ^fix/([0-9]+\.[0-9]+\.[0-9]+)/.+$ ]]; then
                 VERSION="${BASH_REMATCH[1]}"
@@ -68,13 +61,20 @@ jobs:
               ;;
           esac
 
+      - name: Generate release bot token
+        id: release-bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Check for existing pull request
         id: existing
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-bot.outputs.token }}
           BRANCH: ${{ github.ref_name }}
         run: |
           PR_NUMBER="$(
@@ -90,7 +90,7 @@ jobs:
       - name: Create pull request
         if: steps.existing.outputs.number == ''
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-bot.outputs.token }}
           BRANCH: ${{ github.ref_name }}
           BASE: ${{ steps.config.outputs.base }}
           TEMPLATE: ${{ steps.config.outputs.template }}
