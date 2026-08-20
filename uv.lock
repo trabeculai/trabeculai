@@ -387,7 +387,7 @@ wheels = [
 
 [[package]]
 name = "trabeculai"
-version = "0.1.0"
+version = "0.1.0rc1"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
