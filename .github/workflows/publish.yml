@@ -5,23 +5,182 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
 
 jobs:
-  release:
-    name: Publish Release
-    if: "${{ startsWith(github.event.head_commit.message, 'release: v') }}"
+  detect-promotion:
+    name: Detect Release Promotion
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: read
+
+    outputs:
+      promotion: ${{ steps.promotion.outputs.promotion }}
+      pr_number: ${{ steps.promotion.outputs.pr_number }}
+      promotion_sha: ${{ steps.promotion.outputs.promotion_sha }}
+      version: ${{ steps.promotion.outputs.version }}
+      rc_tag: ${{ steps.promotion.outputs.rc_tag }}
+
+    steps:
+      - name: Resolve release promotion
+        id: promotion
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          PR="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$REPOSITORY/commits/$SHA/pulls" \
+              --jq '
+                [
+                  .[]
+                  | select(
+                      .merged_at != null
+                      and .base.ref == "main"
+                      and (.head.ref | startswith("release-promotion/"))
+                    )
+                ]
+                | .[0] // empty
+              '
+          )"
+
+          if [ -z "$PR" ]; then
+            echo "Push to main was not produced by a release promotion."
+            echo "promotion=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          HEAD_REF="$(jq -r '.head.ref' <<< "$PR")"
+          PR_NUMBER="$(jq -r '.number' <<< "$PR")"
+          PROMOTION_SHA="$(jq -r '.head.sha' <<< "$PR")"
+
+          if [[ ! "$HEAD_REF" =~ ^release-promotion/([0-9]+\.[0-9]+\.[0-9]+)/from-(v([0-9]+\.[0-9]+\.[0-9]+)rc([1-9][0-9]*))$ ]]; then
+            echo "::error::Invalid release promotion branch: $HEAD_REF"
+            exit 1
+          fi
+
+          VERSION="${BASH_REMATCH[1]}"
+          RC_TAG="${BASH_REMATCH[2]}"
+          RC_VERSION="${BASH_REMATCH[3]}"
+
+          if [ "$VERSION" != "$RC_VERSION" ]; then
+            echo "::error::Release version '$VERSION' does not match RC version '$RC_VERSION'."
+            exit 1
+          fi
+
+          echo "promotion=true" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "promotion_sha=$PROMOTION_SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "rc_tag=$RC_TAG" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish Release
+    needs: detect-promotion
+    if: needs.detect-promotion.outputs.promotion == 'true'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout stable release
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
+      - name: Fetch release metadata
+        env:
+          PR_NUMBER: ${{ needs.detect-promotion.outputs.pr_number }}
+          RELEASE_BRANCH: release/${{ needs.detect-promotion.outputs.version }}
+        run: |
+          if ! git ls-remote \
+            --exit-code \
+            --heads origin "$RELEASE_BRANCH" >/dev/null 2>&1; then
+            echo "::error::Active release branch '$RELEASE_BRANCH' does not exist."
+            exit 1
+          fi
+
+          git fetch --tags --force
+          git fetch origin "$RELEASE_BRANCH"
+
+          git fetch \
+            origin \
+            "pull/$PR_NUMBER/head:refs/remotes/origin/release-promotion-pr"
+
+      - name: Verify promoted release candidate
+        env:
+          RC_TAG: ${{ needs.detect-promotion.outputs.rc_tag }}
+          EXPECTED_PROMOTION_SHA: ${{ needs.detect-promotion.outputs.promotion_sha }}
+          RELEASE_BRANCH: release/${{ needs.detect-promotion.outputs.version }}
+          STABLE_SHA: ${{ github.sha }}
+        run: |
+          if ! git rev-parse \
+            --verify \
+            "refs/tags/$RC_TAG^{commit}" >/dev/null 2>&1; then
+            echo "::error::Release candidate '$RC_TAG' does not exist."
+            exit 1
+          fi
+
+          RC_SHA="$(git rev-parse "$RC_TAG^{commit}")"
+
+          PROMOTION_SHA="$(
+            git rev-parse refs/remotes/origin/release-promotion-pr
+          )"
+
+          if [ "$PROMOTION_SHA" != "$EXPECTED_PROMOTION_SHA" ]; then
+            echo "::error::Promotion PR head does not match the expected SHA."
+            exit 1
+          fi
+
+          PROMOTION_PARENT="$(git rev-parse "$PROMOTION_SHA^")"
+
+          if [ "$PROMOTION_PARENT" != "$RC_SHA" ]; then
+            echo "::error::Promotion branch was not created directly from '$RC_TAG'."
+            exit 1
+          fi
+
+          RC_SOURCE_SHA="$(git rev-parse "$RC_SHA^")"
+
+          if ! git merge-base \
+            --is-ancestor \
+            "$RC_SOURCE_SHA" \
+            "origin/$RELEASE_BRANCH"; then
+            echo "::error::$RC_TAG does not belong to the active release."
+            exit 1
+          fi
+
+          while IFS= read -r FILE; do
+            case "$FILE" in
+              pyproject.toml|uv.lock)
+                ;;
+              *)
+                echo "::error::Unexpected change between RC and stable promotion: $FILE"
+                exit 1
+                ;;
+            esac
+          done < <(
+            git diff \
+              --name-only \
+              "$RC_SHA" \
+              "$PROMOTION_SHA"
+          )
+
+          if ! git diff --quiet "$PROMOTION_SHA" "$STABLE_SHA"; then
+            echo "::error::Merged stable tree differs from the promoted RC."
+            exit 1
+          fi
+
       - name: Set up uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
         with:
           enable-cache: true
 
@@ -30,6 +189,8 @@ jobs:
 
       - name: Resolve package version
         id: version
+        env:
+          EXPECTED_VERSION: ${{ needs.detect-promotion.outputs.version }}
         run: |
           VERSION="$(
             python3 - <<'PY'
@@ -43,34 +204,23 @@ jobs:
           PY
           )"
 
+          if [ "$VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "::error::Expected version '$EXPECTED_VERSION', found '$VERSION'."
+            exit 1
+          fi
+
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Stable releases must use X.Y.Z format. Found: $VERSION"
+            echo "::error::Stable releases must use X.Y.Z format."
             exit 1
           fi
 
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Verify release commit
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-        run: |
-          EXPECTED="release: v$VERSION"
-
-          FIRST_LINE="$(printf '%s\n' "$COMMIT_MESSAGE" | head -n 1)"
-
-          if [ "$FIRST_LINE" != "$EXPECTED" ]; then
-            echo "::error::Expected release commit '$EXPECTED', found '$FIRST_LINE'."
-            exit 1
-          fi
-
-      - name: Verify tag does not already exist
+      - name: Verify stable tag does not already exist
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          git fetch --tags --force
-
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "::error::Tag '$TAG' already exists."
             exit 1
@@ -78,6 +228,9 @@ jobs:
 
       - name: Sync dependencies
         run: uv sync --locked
+
+      - name: Run quality gateway
+        run: uv run --locked python scripts/quality.py all
 
       - name: Build distributions
         run: uv build
@@ -101,8 +254,9 @@ jobs:
       - name: Create stable tag
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          STABLE_SHA: ${{ github.sha }}
         run: |
-          git tag "$TAG"
+          git tag "$TAG" "$STABLE_SHA"
           git push origin "$TAG"
 
       - name: Create GitHub release
@@ -115,3 +269,46 @@ jobs:
             --verify-tag \
             --generate-notes \
             --title "$TAG"
+
+      - name: Close pending release pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: release/${{ needs.detect-promotion.outputs.version }}
+          VERSION: ${{ needs.detect-promotion.outputs.version }}
+          RC_TAG: ${{ needs.detect-promotion.outputs.rc_tag }}
+        run: |
+          mapfile -t OPEN_PRS < <(
+            gh pr list \
+              --base "$RELEASE_BRANCH" \
+              --state open \
+              --json number \
+              --jq '.[].number'
+          )
+
+          for PR_NUMBER in "${OPEN_PRS[@]}"; do
+            gh pr close "$PR_NUMBER" \
+              --comment "Closing because release v$VERSION was published from $RC_TAG."
+          done
+
+      - name: Close release branch
+        env:
+          RELEASE_BRANCH: release/${{ needs.detect-promotion.outputs.version }}
+        run: |
+          git push origin --delete "$RELEASE_BRANCH"
+
+      - name: Write release summary
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          RC_TAG: ${{ needs.detect-promotion.outputs.rc_tag }}
+          PR_NUMBER: ${{ needs.detect-promotion.outputs.pr_number }}
+        run: |
+          {
+            echo "## Stable Release"
+            echo
+            echo "- Release candidate: \`$RC_TAG\`"
+            echo "- Stable release: \`$TAG\`"
+            echo "- Promotion PR: #$PR_NUMBER"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo
+            echo "Release branch closed successfully."
+          } >> "$GITHUB_STEP_SUMMARY"

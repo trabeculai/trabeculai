@@ -6,8 +6,7 @@ on:
       - closed
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   resolve:
@@ -71,11 +70,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Generate release bot token
+        id: release-bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
       - name: Checkout dev
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: dev
           fetch-depth: 0
+          token: ${{ steps.release-bot.outputs.token }}
 
       - name: Configure Git
         run: |
@@ -103,7 +110,16 @@ jobs:
         env:
           MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
         run: |
-          git cherry-pick "$MERGE_SHA"
+          PARENT_COUNT="$(
+            git rev-list --parents -n 1 "$MERGE_SHA" \
+              | awk '{print NF - 1}'
+          )"
+
+          if [ "$PARENT_COUNT" -gt 1 ]; then
+            git cherry-pick -m 1 "$MERGE_SHA"
+          else
+            git cherry-pick "$MERGE_SHA"
+          fi
 
       - name: Push merge-back branch
         env:
@@ -113,7 +129,7 @@ jobs:
 
       - name: Open merge-back pull request
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-bot.outputs.token }}
           BRANCH: ${{ steps.branch.outputs.name }}
           PR_NUMBER: ${{ needs.resolve.outputs.source_pr }}
           SOURCE_TITLE: ${{ needs.resolve.outputs.source_title }}
@@ -122,12 +138,28 @@ jobs:
             --head "$BRANCH" \
             --base dev \
             --title "mergeback: #${PR_NUMBER} to dev" \
-            --body "Propagates the squashed change from PR #${PR_NUMBER} back into \`dev\`.
+            --body "Propagates the merged change from PR #${PR_NUMBER} back into \`dev\`.
 
-          Source change:
+          ## Source
+
           ${SOURCE_TITLE}
 
-          This pull request was created automatically by the Merge Back workflow."
+          This pull request was created automatically by the TrabeculAI Release Bot."
+
+      - name: Write merge-back summary
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          PR_NUMBER: ${{ needs.resolve.outputs.source_pr }}
+        run: |
+          {
+            echo "## Merge Back"
+            echo
+            echo "- Source PR: #$PR_NUMBER"
+            echo "- Branch: \`$BRANCH\`"
+            echo "- Target: \`dev\`"
+            echo
+            echo "Merge-back pull request created automatically."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   resolve-active-release:
     name: Resolve Active Release
@@ -141,7 +173,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
@@ -149,33 +181,26 @@ jobs:
       - name: Resolve active release
         id: release
         run: |
-          RELEASES="$(
+          mapfile -t ACTIVE_RELEASES < <(
             git ls-remote --heads origin 'release/*' \
               | awk '{print $2}' \
               | sed 's#refs/heads/##'
-          )"
+          )
 
-          COUNT="$(
-            printf '%s\n' "$RELEASES" \
-              | sed '/^$/d' \
-              | wc -l \
-              | tr -d ' '
-          )"
-
-          if [ "$COUNT" -eq 0 ]; then
+          if [ "${#ACTIVE_RELEASES[@]}" -eq 0 ]; then
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "branch=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ "$COUNT" -gt 1 ]; then
-            echo "::error::More than one active release was found:"
-            echo "$RELEASES"
+          if [ "${#ACTIVE_RELEASES[@]}" -gt 1 ]; then
+            echo "::error::Multiple active releases found:"
+            printf '%s\n' "${ACTIVE_RELEASES[@]}"
             exit 1
           fi
 
           echo "exists=true" >> "$GITHUB_OUTPUT"
-          echo "branch=$RELEASES" >> "$GITHUB_OUTPUT"
+          echo "branch=${ACTIVE_RELEASES[0]}" >> "$GITHUB_OUTPUT"
 
   merge-back-release:
     name: Merge Back to Active Release
@@ -186,11 +211,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Generate release bot token
+        id: release-bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+
       - name: Checkout active release
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.resolve-active-release.outputs.branch }}
           fetch-depth: 0
+          token: ${{ steps.release-bot.outputs.token }}
 
       - name: Configure Git
         run: |
@@ -220,7 +253,16 @@ jobs:
         env:
           MERGE_SHA: ${{ needs.resolve.outputs.merge_sha }}
         run: |
-          git cherry-pick "$MERGE_SHA"
+          PARENT_COUNT="$(
+            git rev-list --parents -n 1 "$MERGE_SHA" \
+              | awk '{print NF - 1}'
+          )"
+
+          if [ "$PARENT_COUNT" -gt 1 ]; then
+            git cherry-pick -m 1 "$MERGE_SHA"
+          else
+            git cherry-pick "$MERGE_SHA"
+          fi
 
       - name: Push merge-back branch
         env:
@@ -230,7 +272,7 @@ jobs:
 
       - name: Open merge-back pull request
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-bot.outputs.token }}
           BRANCH: ${{ steps.branch.outputs.name }}
           RELEASE_BRANCH: ${{ needs.resolve-active-release.outputs.branch }}
           PR_NUMBER: ${{ needs.resolve.outputs.source_pr }}
@@ -240,9 +282,26 @@ jobs:
             --head "$BRANCH" \
             --base "$RELEASE_BRANCH" \
             --title "mergeback: #${PR_NUMBER} to ${RELEASE_BRANCH}" \
-            --body "Propagates the squashed hotfix from PR #${PR_NUMBER} into \`${RELEASE_BRANCH}\`.
+            --body "Propagates the merged hotfix from PR #${PR_NUMBER} into \`$RELEASE_BRANCH\`.
 
-          Source change:
+          ## Source
+
           ${SOURCE_TITLE}
 
-          This pull request was created automatically by the Merge Back workflow."
+          This pull request was created automatically by the TrabeculAI Release Bot."
+
+      - name: Write merge-back summary
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          RELEASE_BRANCH: ${{ needs.resolve-active-release.outputs.branch }}
+          PR_NUMBER: ${{ needs.resolve.outputs.source_pr }}
+        run: |
+          {
+            echo "## Merge Back"
+            echo
+            echo "- Source PR: #$PR_NUMBER"
+            echo "- Branch: \`$BRANCH\`"
+            echo "- Target: \`$RELEASE_BRANCH\`"
+            echo
+            echo "Merge-back pull request created automatically."
+          } >> "$GITHUB_STEP_SUMMARY"
