@@ -46,7 +46,7 @@ CHECKS = (
     Check(
         id="mypy",
         name="Mypy",
-        command=("mypy", "src", "tests"),
+        command=("mypy", "src", "tests", "scripts", "experiments"),
     ),
     Check(
         id="pytest",

@@ -64,3 +64,53 @@ def test_repeated_query_terms_do_not_change_score(
     repeated = retriever.retrieve("hypertension hypertension hypertension")
 
     assert repeated == single
+
+
+def test_corpus_is_not_affected_by_external_mutation(
+    evidence_documents: list[EvidenceDocument],
+) -> None:
+    documents = list(evidence_documents)
+
+    retriever = BM25Retriever(documents)
+
+    documents.append(
+        EvidenceDocument(
+            id="new",
+            title="New document",
+            text="new content",
+            source="test",
+        )
+    )
+
+    results = retriever.retrieve(
+        query="new content",
+        top_k=len(documents),
+    )
+
+    assert all(result.document.id != "new" for result in results)
+
+
+def test_corpus_is_snapshotted_at_initialization() -> None:
+    documents = [
+        EvidenceDocument(
+            id="D1",
+            title="Hypertension",
+            text="blood pressure",
+            source="test",
+        ),
+    ]
+
+    retriever = BM25Retriever(documents)
+
+    documents.append(
+        EvidenceDocument(
+            id="D2",
+            title="Diabetes",
+            text="blood glucose",
+            source="test",
+        )
+    )
+
+    results = retriever.retrieve("diabetes")
+
+    assert results == []

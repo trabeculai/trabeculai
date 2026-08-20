@@ -1,14 +1,14 @@
 import math
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import cached_property
 
 from .models import EvidenceDocument, RetrievalResult
 
 
 def _document_indexer(
-    documents: list[EvidenceDocument],
+    documents: Sequence[EvidenceDocument],
     tokenizer: Callable[[str], list[str]],
 ) -> tuple[list[Counter[str]], Counter[str], list[int]]:
     term_frequencies: list[Counter[str]] = []
@@ -34,7 +34,7 @@ class BM25Retriever:
         return re.findall(r"\b\w+\b", text.lower())
 
     def __init__(self, documents: list[EvidenceDocument], k1: float = 1.5, b: float = 0.75) -> None:
-        self._documents = documents
+        self._documents = tuple(documents)
         self._k1 = k1
         self._b = b
 
