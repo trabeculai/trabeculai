@@ -5,8 +5,9 @@ authors = [
 dependencies = [
     "numpy<2",
     "pydantic>=2.13.4",
-    "sentence-transformers>=6.0.1",
+    "sentence-transformers==5.7.0",
     "torch==2.2.2",
+    "transformers==4.57.6",
 ]
 description = "Composable AI infrastructure for healthcare."
 license = "Apache-2.0"
@@ -35,6 +36,9 @@ requires = ["uv_build>=0.12.3,<0.13"]
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
+markers = [
+    "integration: tests that use real external models or integrations",
+]
 
 # ==========================================================
 # Ruff
@@ -64,3 +68,5 @@ files = [
 ]
 python_version = "3.12"
 strict = true
+explicit_package_bases = true
+mypy_path = "src"
