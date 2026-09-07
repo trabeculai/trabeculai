@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from trabeculai.retrieval.bm25 import BM25Retriever
 from trabeculai.retrieval.evaluation import (
     evaluate_retriever,
     load_evaluation_dataset,
 )
+from trabeculai.retrieval.lexical.bm25 import BM25Retriever
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATASET_PATH = PROJECT_ROOT / "data" / "evaluation" / "retrieval"

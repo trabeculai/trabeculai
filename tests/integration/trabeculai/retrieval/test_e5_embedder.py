@@ -1,7 +1,7 @@
 import pytest
 
 from trabeculai.retrieval.models import EvidenceDocument
-from trabeculai.retrieval.vector import (
+from trabeculai.retrieval.semantic import (
     E5SentenceTransformerEmbedder,
     SemanticRetriever,
     cosine_similarity,
