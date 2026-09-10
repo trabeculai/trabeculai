@@ -38,7 +38,7 @@ addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 markers = [
     "integration: tests that use real external models or integrations",
-    "fake_embedder: configures the FakeEmbedder fixture for a test",
+    "anyio: run async tests using AnyIO",
 ]
 
 # ==========================================================

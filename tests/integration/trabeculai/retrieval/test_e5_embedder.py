@@ -47,7 +47,10 @@ def test_e5_semantic_similarity(e5_embedder: E5SentenceTransformerEmbedder) -> N
 
 
 @pytest.mark.integration
-def test_semantic_retriever_with_e5_embedder(e5_embedder: E5SentenceTransformerEmbedder) -> None:
+@pytest.mark.anyio
+async def test_semantic_retriever_with_e5_embedder(
+    e5_embedder: E5SentenceTransformerEmbedder,
+) -> None:
     renal_doc = EvidenceDocument(
         id="renal",
         title="Insuficiência renal",
@@ -74,10 +77,7 @@ def test_semantic_retriever_with_e5_embedder(e5_embedder: E5SentenceTransformerE
         e5_embedder,
     )
 
-    results = retriever.retrieve(
-        "rim parou de funcionar",
-        top_k=3,
-    )
+    results = await retriever.retrieve("rim parou de funcionar", top_k=3)
 
     assert results[0].document.id == "renal"
     assert results[0].rank == 1

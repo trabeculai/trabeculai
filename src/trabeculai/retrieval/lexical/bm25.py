@@ -82,7 +82,7 @@ class BM25Retriever:
 
         return score
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[RetrievalResult]:
+    async def retrieve(self, query: str, top_k: int = 5) -> list[RetrievalResult]:
         if top_k <= 0:
             raise ValueError("top_k must be greater than 0")
 
