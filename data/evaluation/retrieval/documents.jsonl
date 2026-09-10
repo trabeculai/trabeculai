@@ -3,3 +3,10 @@
 {"id":"D3","title":"Asma","text":"A asma é uma doença inflamatória crônica das vias aéreas. O tratamento pode incluir medicamentos inalatórios.","source":"synthetic"}
 {"id":"D4","title":"Pancreatite aguda","text":"A pancreatite aguda é uma inflamação súbita do pâncreas. O manejo inclui avaliação da gravidade, hidratação e tratamento da causa.","source":"synthetic"}
 {"id":"D5","title":"Insuficiência cardíaca","text":"A insuficiência cardíaca ocorre quando o coração não consegue bombear sangue adequadamente. O tratamento depende da apresentação clínica e da causa.","source":"synthetic"}
+{"id":"D6","title":"Doença renal crônica","text":"A doença renal crônica ocorre quando os rins perdem progressivamente a capacidade de filtrar o sangue e eliminar resíduos. Casos avançados podem exigir diálise.","source":"synthetic"}
+{"id":"D7","title":"Infarto agudo do miocárdio","text":"O infarto agudo do miocárdio ocorre quando há interrupção do fluxo sanguíneo para parte do músculo cardíaco. Pode causar dor intensa no peito, falta de ar e sudorese.","source":"synthetic"}
+{"id":"D8","title":"Hipoglicemia","text":"A hipoglicemia ocorre quando a glicose no sangue fica abaixo do normal. Pode causar tremores, sudorese, confusão e perda de consciência.","source":"synthetic"}
+{"id":"D9","title":"Bronquite crônica","text":"A bronquite crônica é caracterizada por inflamação persistente dos brônquios, geralmente associada a tosse produtiva e dificuldade respiratória.","source":"synthetic"}
+{"id":"D10","title":"Insuficiência pancreática","text":"A insuficiência pancreática ocorre quando o pâncreas não produz enzimas digestivas suficientes, podendo causar má digestão, perda de peso e alterações nas fezes.","source":"synthetic"}
+{"id":"D11","title":"Arritmia cardíaca","text":"Arritmias cardíacas são alterações no ritmo dos batimentos do coração e podem causar palpitações, tontura ou desmaio.","source":"synthetic"}
+{"id":"D12","title":"Hipertensão pulmonar","text":"A hipertensão pulmonar é caracterizada pelo aumento da pressão nos vasos sanguíneos dos pulmões e pode causar falta de ar e cansaço.","source":"synthetic"}
