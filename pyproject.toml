@@ -38,6 +38,7 @@ addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 markers = [
     "integration: tests that use real external models or integrations",
+    "anyio: run async tests using AnyIO",
 ]
 
 # ==========================================================
