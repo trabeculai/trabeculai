@@ -4,7 +4,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from functools import cached_property
 
-from .models import EvidenceDocument, RetrievalResult
+from ..models import EvidenceDocument, RetrievalResult
 
 
 def _document_indexer(

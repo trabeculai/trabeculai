@@ -2,3 +2,15 @@
 {"query_id":"Q2","document_id":"D2","relevance":3}
 {"query_id":"Q3","document_id":"D4","relevance":3}
 {"query_id":"Q4","document_id":"D3","relevance":3}
+{"query_id":"Q5","document_id":"D6","relevance":3}
+{"query_id":"Q6","document_id":"D7","relevance":3}
+{"query_id":"Q7","document_id":"D8","relevance":3}
+{"query_id":"Q8","document_id":"D9","relevance":3}
+{"query_id":"Q9","document_id":"D10","relevance":3}
+{"query_id":"Q10","document_id":"D11","relevance":3}
+{"query_id":"Q11","document_id":"D12","relevance":3}
+{"query_id":"Q12","document_id":"D6","relevance":3}
+{"query_id":"Q13","document_id":"D7","relevance":3}
+{"query_id":"Q14","document_id":"D12","relevance":3}
+{"query_id":"Q15","document_id":"D9","relevance":3}
+{"query_id":"Q6","document_id":"D5","relevance":1}

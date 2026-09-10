@@ -1,10 +1,7 @@
 from pathlib import Path
 
-from trabeculai.retrieval.evaluation import (
-    evaluate_retriever,
-    load_evaluation_dataset,
-)
-from trabeculai.retrieval.lexical.bm25 import BM25Retriever
+from trabeculai.retrieval.evaluation import evaluate_retriever, load_evaluation_dataset
+from trabeculai.retrieval.semantic import E5SentenceTransformerEmbedder, SemanticRetriever
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATASET_PATH = PROJECT_ROOT / "data" / "evaluation" / "retrieval"
@@ -13,11 +10,12 @@ DATASET_PATH = PROJECT_ROOT / "data" / "evaluation" / "retrieval"
 def main() -> None:
     dataset = load_evaluation_dataset(DATASET_PATH)
 
-    retriever = BM25Retriever(dataset.documents)
+    embedder = E5SentenceTransformerEmbedder()
+    retriever = SemanticRetriever(dataset.documents, embedder)
 
     report = evaluate_retriever(retriever=retriever, dataset=dataset, k=3)
 
-    print("BM25 Retrieval Baseline")
+    print("Semantic Retrieval Baseline")
     print(f"Recall@{report.k}: {report.mean_recall_at_k:.4f}")
     print(f"MRR: {report.mrr:.4f}")
     print(f"NDCG@{report.k}: {report.mean_ndcg_at_k:.4f}")

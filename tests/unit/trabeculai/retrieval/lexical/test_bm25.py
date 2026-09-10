@@ -1,6 +1,6 @@
 import pytest
 
-from trabeculai.retrieval.bm25 import BM25Retriever
+from trabeculai.retrieval.lexical.bm25 import BM25Retriever
 from trabeculai.retrieval.models import EvidenceDocument
 
 
