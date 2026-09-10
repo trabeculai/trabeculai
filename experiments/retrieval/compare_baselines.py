@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from trabeculai.retrieval.evaluation import (
@@ -20,7 +21,7 @@ def print_summary(name: str, report: RetrievalEvaluationReport) -> None:
     print()
 
 
-def main() -> None:
+async def main() -> None:
     dataset = load_evaluation_dataset(DATASET_PATH)
 
     bm25 = BM25Retriever(dataset.documents)
@@ -28,8 +29,8 @@ def main() -> None:
     embedder = E5SentenceTransformerEmbedder()
     semantic = SemanticRetriever(dataset.documents, embedder)
 
-    bm25_report = evaluate_retriever(retriever=bm25, dataset=dataset, k=3)
-    semantic_report = evaluate_retriever(retriever=semantic, dataset=dataset, k=3)
+    bm25_report = await evaluate_retriever(retriever=bm25, dataset=dataset, k=3)
+    semantic_report = await evaluate_retriever(retriever=semantic, dataset=dataset, k=3)
 
     print("Retrieval Baseline Comparison\n")
 
@@ -53,4 +54,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

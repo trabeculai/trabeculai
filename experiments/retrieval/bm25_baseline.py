@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from trabeculai.retrieval.evaluation import (
@@ -10,12 +11,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATASET_PATH = PROJECT_ROOT / "data" / "evaluation" / "retrieval"
 
 
-def main() -> None:
+async def main() -> None:
     dataset = load_evaluation_dataset(DATASET_PATH)
 
     retriever = BM25Retriever(dataset.documents)
 
-    report = evaluate_retriever(retriever=retriever, dataset=dataset, k=3)
+    report = await evaluate_retriever(retriever=retriever, dataset=dataset, k=3)
 
     print("BM25 Retrieval Baseline")
     print(f"Recall@{report.k}: {report.mean_recall_at_k:.4f}")
@@ -34,4 +35,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
