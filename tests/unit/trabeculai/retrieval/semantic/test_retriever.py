@@ -1,17 +1,18 @@
-from collections.abc import Callable, Sequence
+import pytest
 
+from tests.fakes import FakeEmbedder
 from trabeculai.retrieval.models import EvidenceDocument
-from trabeculai.retrieval.semantic import Embedder, SemanticRetriever
+from trabeculai.retrieval.semantic import SemanticRetriever
 
 
-def test_semantic_retriever(
+@pytest.mark.anyio
+async def test_semantic_retriever(
     evidence_documents: list[EvidenceDocument],
-    fake_embedder_factory: Callable[[dict[str, Sequence[float]]], Embedder],
 ) -> None:
     renal_doc = evidence_documents[0]
     cardio_doc = evidence_documents[1]
 
-    embedder = fake_embedder_factory(
+    embedder = FakeEmbedder(
         {
             f"{renal_doc.title} {renal_doc.text}": [1.0, 0.1],
             f"{cardio_doc.title} {cardio_doc.text}": [0.1, 1.0],
@@ -19,9 +20,12 @@ def test_semantic_retriever(
         }
     )
 
-    retriever = SemanticRetriever([renal_doc, cardio_doc], embedder)
+    retriever = SemanticRetriever(
+        [renal_doc, cardio_doc],
+        embedder,
+    )
 
-    results = retriever.retrieve(
+    results = await retriever.retrieve(
         "rim parou de funcionar",
         top_k=1,
     )

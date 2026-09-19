@@ -6,7 +6,7 @@ from ..retriever import Retriever
 from .models import QueryEvaluationResult, RetrievalEvaluationDataset, RetrievalEvaluationReport
 
 
-def evaluate_retriever(
+async def evaluate_retriever(
     retriever: Retriever,
     dataset: RetrievalEvaluationDataset,
     k: int,
@@ -29,7 +29,7 @@ def evaluate_retriever(
             document_id for document_id, relevance in query_relevance.items() if relevance > 0
         }
 
-        results = retriever.retrieve(query.text, top_k=len(dataset.documents))
+        results = await retriever.retrieve(query.text, top_k=len(dataset.documents))
 
         query_results.append(
             QueryEvaluationResult(

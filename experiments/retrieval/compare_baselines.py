@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from trabeculai.retrieval.evaluation import (
@@ -5,6 +6,7 @@ from trabeculai.retrieval.evaluation import (
     evaluate_retriever,
     load_evaluation_dataset,
 )
+from trabeculai.retrieval.hybrid import HybridRetriever
 from trabeculai.retrieval.lexical.bm25 import BM25Retriever
 from trabeculai.retrieval.semantic import E5SentenceTransformerEmbedder, SemanticRetriever
 
@@ -20,7 +22,7 @@ def print_summary(name: str, report: RetrievalEvaluationReport) -> None:
     print()
 
 
-def main() -> None:
+async def main() -> None:
     dataset = load_evaluation_dataset(DATASET_PATH)
 
     bm25 = BM25Retriever(dataset.documents)
@@ -28,19 +30,24 @@ def main() -> None:
     embedder = E5SentenceTransformerEmbedder()
     semantic = SemanticRetriever(dataset.documents, embedder)
 
-    bm25_report = evaluate_retriever(retriever=bm25, dataset=dataset, k=3)
-    semantic_report = evaluate_retriever(retriever=semantic, dataset=dataset, k=3)
+    hybrid = HybridRetriever([bm25, semantic])
+
+    bm25_report = await evaluate_retriever(retriever=bm25, dataset=dataset, k=3)
+    semantic_report = await evaluate_retriever(retriever=semantic, dataset=dataset, k=3)
+    hybrid_report = await evaluate_retriever(retriever=hybrid, dataset=dataset, k=3)
 
     print("Retrieval Baseline Comparison\n")
 
     print_summary("BM25", bm25_report)
     print_summary("Semantic E5", semantic_report)
+    print_summary("Hybrid", hybrid_report)
 
     print("Per-query comparison:")
 
-    for bm25_result, semantic_result in zip(
+    for bm25_result, semantic_result, hybrid_result in zip(
         bm25_report.queries,
         semantic_report.queries,
+        hybrid_report.queries,
         strict=True,
     ):
         print(
@@ -48,9 +55,11 @@ def main() -> None:
             f"BM25 RR={bm25_result.reciprocal_rank:.4f}, "
             f"NDCG@{bm25_report.k}={bm25_result.ndcg_at_k:.4f} | "
             f"Semantic RR={semantic_result.reciprocal_rank:.4f}, "
-            f"NDCG@{semantic_report.k}={semantic_result.ndcg_at_k:.4f}"
+            f"NDCG@{semantic_report.k}={semantic_result.ndcg_at_k:.4f} | "
+            f"Hybrid RR={hybrid_result.reciprocal_rank:.4f}, "
+            f"NDCG@{hybrid_report.k}={hybrid_result.ndcg_at_k:.4f}"
         )
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

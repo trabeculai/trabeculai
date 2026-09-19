@@ -1,3 +1,5 @@
+import asyncio
+
 from ..models import EvidenceDocument, RetrievalResult
 from .embedder import Embedder
 from .index import VectorIndex
@@ -14,8 +16,8 @@ class SemanticRetriever:
             vector = self._embedder.embed_document(text)
             self._index.add(document.id, vector)
 
-    def retrieve(self, query: str, top_k: int = 5) -> list[RetrievalResult]:
-        query_vector = self._embedder.embed_query(query)
+    async def retrieve(self, query: str, top_k: int = 5) -> list[RetrievalResult]:
+        query_vector = await asyncio.to_thread(self._embedder.embed_query, query)
         ranked_vectors = self._index.search(query_vector, top_k)
 
         return [

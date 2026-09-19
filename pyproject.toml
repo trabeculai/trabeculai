@@ -18,6 +18,7 @@ version = "0.1.0"
 
 [dependency-groups]
 dev = [
+  "anyio>=4.15.1",
   "mypy",
   "pre-commit>=4.6.2",
   "pytest",
@@ -38,7 +39,7 @@ addopts = "-ra --strict-config --strict-markers"
 testpaths = ["tests"]
 markers = [
     "integration: tests that use real external models or integrations",
-    "fake_embedder: configures the FakeEmbedder fixture for a test",
+    "anyio: run async tests using AnyIO",
 ]
 
 # ==========================================================
