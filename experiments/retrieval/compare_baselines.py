@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 from pathlib import Path
 
@@ -22,8 +23,8 @@ def print_summary(name: str, report: RetrievalEvaluationReport) -> None:
     print()
 
 
-async def main() -> None:
-    dataset = load_evaluation_dataset(DATASET_PATH)
+async def main(dataset_path: Path = DATASET_PATH, k: int = 3) -> None:
+    dataset = load_evaluation_dataset(dataset_path)
 
     bm25 = BM25Retriever(dataset.documents)
 
@@ -32,9 +33,9 @@ async def main() -> None:
 
     hybrid = HybridRetriever([bm25, semantic])
 
-    bm25_report = await evaluate_retriever(retriever=bm25, dataset=dataset, k=3)
-    semantic_report = await evaluate_retriever(retriever=semantic, dataset=dataset, k=3)
-    hybrid_report = await evaluate_retriever(retriever=hybrid, dataset=dataset, k=3)
+    bm25_report = await evaluate_retriever(retriever=bm25, dataset=dataset, k=k)
+    semantic_report = await evaluate_retriever(retriever=semantic, dataset=dataset, k=k)
+    hybrid_report = await evaluate_retriever(retriever=hybrid, dataset=dataset, k=k)
 
     print("Retrieval Baseline Comparison\n")
 
@@ -62,4 +63,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Compare retrievers on an evaluation dataset")
+    parser.add_argument("--dataset", type=Path, default=DATASET_PATH)
+    parser.add_argument("--k", type=int, default=3)
+    args = parser.parse_args()
+    asyncio.run(main(dataset_path=args.dataset, k=args.k))
